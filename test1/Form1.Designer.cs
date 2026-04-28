@@ -280,7 +280,7 @@
             this.btnWrite.TabIndex = 17;
             this.btnWrite.Text = "Write";
             this.btnWrite.UseVisualStyleBackColor = true;
-            this.btnWrite.Click += new System.EventHandler(this.btnWrite_Click);
+
 
             // 
             // Form1

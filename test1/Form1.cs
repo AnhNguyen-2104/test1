@@ -1,11 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace test1
@@ -13,291 +7,80 @@ namespace test1
     public partial class Form1 : Form
     {
         private PLCCommunication plcComm;
-        private string plcIPAddress = "192.168.1.100"; // default
-        private int plcPort = 2000; // Default MELSEC Ethernet port
 
         public Form1()
         {
             InitializeComponent();
-            InitializePLCFromFields();
             UpdateConnectionState(false);
-        }
-
-        private void InitializePLCFromFields()
-        {
-            try
-            {
-                plcIPAddress = txtIPAddress.Text.Trim();
-                if (!int.TryParse(txtPort.Text.Trim(), out plcPort))
-                    plcPort = 2000;
-
-                plcComm = new PLCCommunication(plcIPAddress, plcPort);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error initializing PLC: {ex.Message}", "Error");
-            }
         }
 
         private void UpdateConnectionState(bool connected)
         {
-            if (connected)
-            {
-                lblConnectionState.Text = "PLC CONNECTED";
-                lblConnectionState.BackColor = Color.LightGreen;
-            }
-            else
-            {
-                lblConnectionState.Text = "PLC DISCONNECTED";
-                lblConnectionState.BackColor = Color.LightCoral;
-            }
+            lblConnectionState.Text = connected ? "PLC CONNECTED" : "PLC DISCONNECTED";
+            lblConnectionState.BackColor = connected ? Color.LightGreen : Color.LightCoral;
         }
 
         private void btnConnectSystem_Click(object sender, EventArgs e)
         {
-            // Reinitialize with current fields
-            InitializePLCFromFields();
-
             try
             {
+                string ip = txtIPAddress.Text.Trim();
+                int port = int.TryParse(txtPort.Text.Trim(), out int p) ? p : 2000;
+
+                plcComm = new PLCCommunication(ip, port);
                 if (plcComm.Connect())
                 {
                     UpdateConnectionState(true);
-                    MessageBox.Show("Connected to PLC successfully!", "Success");
+                    MessageBox.Show("Kết nối thành công!");
                 }
-                else
-                {
-                    UpdateConnectionState(false);
-                    MessageBox.Show("Failed to connect to PLC", "Error");
-                }
+                else MessageBox.Show("Kết nối thất bại.");
             }
-            catch (Exception ex)
-            {
-                UpdateConnectionState(false);
-                MessageBox.Show($"Connection error: {ex.Message}", "Error");
-            }
+            catch (Exception ex) { MessageBox.Show(ex.Message); }
         }
 
         private void btnWriteSetDevice32_Click(object sender, EventArgs e)
         {
-            string devicePath = txtDeviceName.Text.Trim();
-            if (string.IsNullOrEmpty(devicePath))
-            {
-                MessageBox.Show("Please enter device path (e.g., U0\\G2006)", "Input Required");
-                return;
-            }
-
-            if (!int.TryParse(txtValue.Text.Trim(), out int value))
-            {
-                MessageBox.Show("Please enter a valid integer value", "Input Required");
-                return;
-            }
-
             try
             {
-                string usedMethod;
-                int result = plcComm.WriteInt32ToDevicePath(devicePath, value, out usedMethod);
-                if (result == 0)
-                {
-                    MessageBox.Show($"Write successful to {devicePath} via {usedMethod}", "Success");
-                }
-                else
-                {
-                    MessageBox.Show($"SetDevice write failed: {plcComm.GetErrorMessage(result)} (0x{result:X8})", "Error");
-                }
+                string path = txtDeviceName.Text.Trim();
+                int val = int.Parse(txtValue.Text.Trim());
+                int res = plcComm.WriteInt32ToDevicePath(path, val, out string method);
+
+                if (res == 0) MessageBox.Show($"Ghi thành công qua {method}");
+                else MessageBox.Show($"Lỗi: {plcComm.GetErrorMessage(res)}");
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Write error: {ex.Message}", "Error");
-            }
+            catch (Exception ex) { MessageBox.Show(ex.Message); }
         }
 
         private void btnWriteBuffer_Click(object sender, EventArgs e)
         {
-            if (!int.TryParse(txtStartIO.Text.Trim(), out int startIO))
-            {
-                MessageBox.Show("Invalid Start IO", "Input Required");
-                return;
-            }
-
-            if (!int.TryParse(txtBufferAddress.Text.Trim(), out int gaddr))
-            {
-                MessageBox.Show("Invalid G address", "Input Required");
-                return;
-            }
-
-            if (!int.TryParse(txtValue.Text.Trim(), out int value))
-            {
-                MessageBox.Show("Invalid integer value", "Input Required");
-                return;
-            }
-
             try
             {
-                string usedOrder;
-                int result = plcComm.WriteInt32ToBufferAuto(startIO, gaddr, value, out usedOrder);
-                if (result == 0)
-                {
-                    MessageBox.Show($"WriteBuffer write successful to U{startIO} G{gaddr} (order: {usedOrder})", "Success");
-                }
-                else
-                {
-                    MessageBox.Show($"WriteBuffer failed: {plcComm.GetErrorMessage(result)} (0x{result:X8})", "Error");
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"WriteBuffer error: {ex.Message}", "Error");
-            }
-        }
+                int startIO = int.Parse(txtStartIO.Text.Trim());
+                int gAddr = int.Parse(txtBufferAddress.Text.Trim());
+                int val = int.Parse(txtValue.Text.Trim());
 
-        /// <summary>
-        /// Disconnect from the PLC
-        /// </summary>
-        public void DisconnectFromPLC()
-        {
-            try
-            {
-                if (plcComm != null && plcComm.Disconnect())
-                {
-                    UpdateConnectionState(false);
-                    MessageBox.Show("Disconnected from PLC successfully!", "Success");
-                }
-                else
-                {
-                    MessageBox.Show("Failed to disconnect from PLC", "Error");
-                }
+                int res = plcComm.WriteInt32ToBufferAuto(startIO, gAddr, val, out string order);
+                if (res == 0) MessageBox.Show($"Ghi Buffer thành công ({order})");
+                else MessageBox.Show($"Lỗi: {plcComm.GetErrorMessage(res)}");
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Disconnection error: {ex.Message}", "Error");
-            }
-        }
-
-        /// <summary>
-        /// Example: Read a value from the PLC
-        /// Device naming examples: "D100" (Data register), "M100" (Relay), "Y0" (Output)
-        /// </summary>
-        public object ReadValueFromPLC(string deviceName)
-        {
-            try
-            {
-                if (plcComm == null || !plcComm.IsConnected)
-                {
-                    MessageBox.Show("Not connected to PLC", "Error");
-                    return null;
-                }
-
-                object value = plcComm.ReadDevice(deviceName);
-                return value;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Read error: {ex.Message}", "Error");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Example: Write a value to the PLC
-        /// Device naming examples: "D100" (Data register), "M100" (Relay), "Y0" (Output)
-        /// </summary>
-        public bool WriteValueToPLC(string deviceName, object value)
-        {
-            try
-            {
-                if (plcComm == null || !plcComm.IsConnected)
-                {
-                    MessageBox.Show("Not connected to PLC", "Error");
-                    return false;
-                }
-
-                plcComm.WriteDevice(deviceName, value);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Write error: {ex.Message}", "Error");
-                return false;
-            }
-        }
-
-        private void btnConnect_Click(object sender, EventArgs e)
-        {
-            // Hidden small button
-            btnConnectSystem_Click(sender, e);
-        }
-
-        private void btnDisconnect_Click(object sender, EventArgs e)
-        {
-            DisconnectFromPLC();
+            catch (Exception ex) { MessageBox.Show(ex.Message); }
         }
 
         private void btnRead_Click(object sender, EventArgs e)
         {
-            string deviceName = txtDeviceName.Text.Trim();
-            if (string.IsNullOrEmpty(deviceName))
+            try
             {
-                MessageBox.Show("Please enter a device name (e.g., D100, M100, Y0)", "Input Required");
-                return;
+                object val = plcComm.ReadDevice(txtDeviceName.Text.Trim());
+                if (val != null) txtValue.Text = val.ToString();
             }
-
-            object value = ReadValueFromPLC(deviceName);
-            if (value != null)
-            {
-                txtValue.Text = value.ToString();
-            }
+            catch (Exception ex) { MessageBox.Show(ex.Message); }
         }
 
-        private void btnWrite_Click(object sender, EventArgs e)
-        {
-            string deviceName = txtDeviceName.Text.Trim();
-            string value = txtValue.Text.Trim();
-
-            if (string.IsNullOrEmpty(deviceName))
-            {
-                MessageBox.Show("Please enter a device name (e.g., D100, M100, Y0)", "Input Required");
-                return;
-            }
-
-            if (string.IsNullOrEmpty(value))
-            {
-                MessageBox.Show("Please enter a value to write", "Input Required");
-                return;
-            }
-
-            // Try to convert value to appropriate type
-            object writeValue;
-            if (int.TryParse(value, out int intValue))
-            {
-                writeValue = intValue;
-            }
-            else if (double.TryParse(value, out double doubleValue))
-            {
-                writeValue = doubleValue;
-            }
-            else
-            {
-                writeValue = value;
-            }
-
-            if (WriteValueToPLC(deviceName, writeValue))
-            {
-                MessageBox.Show($"Successfully wrote {writeValue} to {deviceName}", "Success");
-            }
-        }
-
-        /// <summary>
-        /// Clean up resources on form closing
-        /// </summary>
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (plcComm != null) plcComm.Dispose();
             base.OnFormClosing(e);
-
-            if (plcComm != null)
-            {
-                plcComm.Dispose();
-            }
         }
     }
 }
