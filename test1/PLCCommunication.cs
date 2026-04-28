@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Reflection;
+using ActUtlTypeLib;
+using System.Runtime.InteropServices;
 
 namespace test1
 {
@@ -10,7 +12,8 @@ namespace test1
     /// </summary>
     public class PLCCommunication : IDisposable
     {
-        private dynamic plcDevice;
+        // Use early-bound interop type instead of dynamic for reliable COM calls
+        private ActUtlType plcDevice;
         private bool isConnected = false;
 
         public string IPAddress { get; set; }
@@ -24,9 +27,8 @@ namespace test1
 
             try
             {
-                // Create instance of ActUtlType from the Mitsubishi library
-                Type actUtlType = Type.GetTypeFromProgID("ActUtlType.ActUtlType");
-                plcDevice = Activator.CreateInstance(actUtlType);
+                // Instantiate the COM object using the Interop wrapper class generated from the Mitsubishi library
+                plcDevice = new ActUtlTypeClass();
             }
             catch (Exception ex)
             {
@@ -245,112 +247,22 @@ namespace test1
             if (data == null)
                 throw new ArgumentNullException(nameof(data));
 
-            short sStart = Convert.ToInt16(startIO);
-            int writeSize = data.Length; // number of 16-bit words
-
-            List<Exception> errors = new List<Exception>();
-
-            // Candidate buffer representations
-            object bufShortArray = (object)data; // short[] boxed
-
-            Array bufArr = Array.CreateInstance(typeof(short), data.Length);
-            for (int i = 0; i < data.Length; i++) bufArr.SetValue(data[i], i);
-
-            // object[] of boxed Int32 (some COM servers expect 32-bit elements)
-            object[] bufObjectInts = new object[data.Length];
-            for (int i = 0; i < data.Length; i++) bufObjectInts[i] = (int)data[i];
-
-            // object[] of boxed Int16
-            object[] bufObjectShorts = new object[data.Length];
-            for (int i = 0; i < data.Length; i++) bufObjectShorts[i] = data[i];
-
-            // Try 1: dynamic call with short[]
             try
             {
-                object dynBuf = bufShortArray;
-                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref dynBuf);
+                short sStart = Convert.ToInt16(startIO);
+                int writeSize = data.Length; // number of 16-bit words
+
+                // Pass buffer as object (ref) — interop wrapper expects a SAFEARRAY/Variant array
+                object bufObj = (object)data;
+
+                // Early-bound call using Interop assembly. This should marshal the short[] as SAFEARRAY(Int16).
+                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
                 return result;
             }
             catch (Exception ex)
             {
-                errors.Add(ex);
+                throw new Exception($"WriteBuffer failed at U{startIO} G{address}: {ex.Message}");
             }
-
-            // Try 2: dynamic call with System.Array (Int16)
-            try
-            {
-                object dynBuf = bufArr;
-                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref dynBuf);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                errors.Add(ex);
-            }
-
-            // Try 3: dynamic call with object[] of ints
-            try
-            {
-                object dynBuf = bufObjectInts;
-                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref dynBuf);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                errors.Add(ex);
-            }
-
-            // Try 4: reflection invoke with ParameterModifier to mark last param as ByRef
-            var comType = plcDevice.GetType();
-            object[] bufCandidates = new object[] { bufShortArray, bufArr, bufObjectInts, bufObjectShorts };
-
-            foreach (var bufCandidate in bufCandidates)
-            {
-                // Try combinations of startIO/address as short/int
-                var startVariants = new object[] { sStart, (int)startIO };
-                var addrVariants = new object[] { address, (short)address };
-
-                foreach (var startVariant in startVariants)
-                {
-                    foreach (var addrVariant in addrVariants)
-                    {
-                        try
-                        {
-                            object[] args = new object[] { startVariant, addrVariant, writeSize, bufCandidate };
-                            // Mark last parameter as ByRef
-                            ParameterModifier pm = new ParameterModifier(4);
-                            pm[3] = true;
-                            ParameterModifier[] mods = new ParameterModifier[] { pm };
-
-                            object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args, mods, null, null);
-
-                            if (invoked != null)
-                                return Convert.ToInt32(invoked);
-
-                            // Some COM methods return via the args or return null; try to interpret
-                            // If args[3] was modified and method returned via result property, try to call again or assume success
-                        }
-                        catch (TargetInvocationException tie)
-                        {
-                            errors.Add(tie.InnerException ?? tie);
-                        }
-                        catch (Exception ex)
-                        {
-                            errors.Add(ex);
-                        }
-                    }
-                }
-            }
-
-            // If all attempts failed, throw aggregated exception with messages
-            var aggMsg = new System.Text.StringBuilder();
-            aggMsg.AppendLine($"WriteBuffer failed at U{startIO} G{address}. Attempts:");
-            for (int i = 0; i < errors.Count; i++)
-            {
-                aggMsg.AppendLine($"[{i}] {errors[i].GetType().Name}: {errors[i].Message}");
-            }
-
-            throw new Exception(aggMsg.ToString());
         }
 
         /// <summary>
@@ -369,8 +281,11 @@ namespace test1
             try
             {
                 short sStart = Convert.ToInt16(startIO);
-                short[] data = new short[size];
-                object bufObj = data;
+
+                // Prepare an object buffer to receive data
+                short[] placeholder = new short[size];
+                object bufObj = (object)placeholder;
+
                 int result = plcDevice.ReadBuffer(sStart, address, size, ref bufObj);
                 resultCode = result;
 
@@ -383,9 +298,7 @@ namespace test1
                     {
                         short[] outArr = new short[oArr.Length];
                         for (int i = 0; i < oArr.Length; i++)
-                        {
                             outArr[i] = Convert.ToInt16(oArr[i]);
-                        }
                         return outArr;
                     }
 
@@ -677,9 +590,13 @@ namespace test1
             {
                 try
                 {
-                    System.Runtime.InteropServices.Marshal.ReleaseComObject(plcDevice);
+                    Marshal.ReleaseComObject(plcDevice);
                 }
                 catch { }
+                finally
+                {
+                    plcDevice = null;
+                }
             }
         }
     }
