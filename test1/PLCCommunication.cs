@@ -112,13 +112,12 @@ namespace test1
 
         public int WriteInt32ToDevicePath(string devicePath, int value, out string usedMethod)
         {
-            usedMethod = "Unknown";
-            if (TryParseUDevicePath(devicePath, out int uNum, out int gAddr))
+            if (TryGetNextWordDevice(devicePath, out string nextWordDevice))
             {
-                // Buffer memory Ux\Gy 32-bit must be written as Low word first, then High word.
-                usedMethod = "WriteBuffer (Low word -> High word)";
-                return WriteInt32ToBuffer(uNum, gAddr, value);
+                usedMethod = "SetDevice2 x2 (Low word -> High word)";
+                return WriteInt32ByWords(devicePath, nextWordDevice, value);
             }
+
             usedMethod = "SetDevice";
             return plcDevice.SetDevice(devicePath, value);
         }
@@ -131,6 +130,29 @@ namespace test1
             if (!m.Success) return false;
             return int.TryParse(m.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uNumber)
                 && int.TryParse(m.Groups[2].Value, out gAddress);
+        }
+
+        private int WriteInt32ByWords(string lowWordDevice, string highWordDevice, int value)
+        {
+            short lowWord = (short)(value & 0xFFFF);
+            short highWord = (short)((value >> 16) & 0xFFFF);
+
+            int result = plcDevice.SetDevice2(lowWordDevice, lowWord);
+            if (result != 0) return result;
+
+            return plcDevice.SetDevice2(highWordDevice, highWord);
+        }
+
+        private static bool TryGetNextWordDevice(string devicePath, out string nextWordDevice)
+        {
+            nextWordDevice = null;
+            var match = Regex.Match(devicePath.Trim(), @"^(?<prefix>.*?)(?<address>\d+)$", RegexOptions.IgnoreCase);
+            if (!match.Success) return false;
+
+            if (!int.TryParse(match.Groups["address"].Value, out int address)) return false;
+
+            nextWordDevice = match.Groups["prefix"].Value + (address + 1).ToString(CultureInfo.InvariantCulture);
+            return true;
         }
 
         private static string GetInnermostMessage(Exception ex)
