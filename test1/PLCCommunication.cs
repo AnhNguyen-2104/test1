@@ -300,45 +300,45 @@ namespace test1
                 errors.Add(ex);
             }
 
-            // Try 4: reflection invoke with various startIO types and buffer types
+            // Try 4: reflection invoke with ParameterModifier to mark last param as ByRef
             var comType = plcDevice.GetType();
-            object[][] bufCandidates = new object[][] { new object[] { bufShortArray }, new object[] { bufArr }, new object[] { bufObjectInts }, new object[] { bufObjectShorts } };
-            foreach (object[] bufCandWrapper in bufCandidates)
+            object[] bufCandidates = new object[] { bufShortArray, bufArr, bufObjectInts, bufObjectShorts };
+
+            foreach (var bufCandidate in bufCandidates)
             {
-                object bufCandidate = bufCandWrapper[0];
+                // Try combinations of startIO/address as short/int
+                var startVariants = new object[] { sStart, (int)startIO };
+                var addrVariants = new object[] { address, (short)address };
 
-                // Try startIO as short
-                try
+                foreach (var startVariant in startVariants)
                 {
-                    object[] args = new object[] { sStart, address, writeSize, bufCandidate };
-                    object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args);
-                    if (invoked != null)
-                        return Convert.ToInt32(invoked);
-                }
-                catch (TargetInvocationException tie)
-                {
-                    errors.Add(tie.InnerException ?? tie);
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(ex);
-                }
+                    foreach (var addrVariant in addrVariants)
+                    {
+                        try
+                        {
+                            object[] args = new object[] { startVariant, addrVariant, writeSize, bufCandidate };
+                            // Mark last parameter as ByRef
+                            ParameterModifier pm = new ParameterModifier(4);
+                            pm[3] = true;
+                            ParameterModifier[] mods = new ParameterModifier[] { pm };
 
-                // Try startIO as int
-                try
-                {
-                    object[] args = new object[] { (int)startIO, address, writeSize, bufCandidate };
-                    object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args);
-                    if (invoked != null)
-                        return Convert.ToInt32(invoked);
-                }
-                catch (TargetInvocationException tie)
-                {
-                    errors.Add(tie.InnerException ?? tie);
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(ex);
+                            object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args, mods, null, null);
+
+                            if (invoked != null)
+                                return Convert.ToInt32(invoked);
+
+                            // Some COM methods return via the args or return null; try to interpret
+                            // If args[3] was modified and method returned via result property, try to call again or assume success
+                        }
+                        catch (TargetInvocationException tie)
+                        {
+                            errors.Add(tie.InnerException ?? tie);
+                        }
+                        catch (Exception ex)
+                        {
+                            errors.Add(ex);
+                        }
+                    }
                 }
             }
 
