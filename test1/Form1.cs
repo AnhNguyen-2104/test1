@@ -924,11 +924,18 @@ namespace test1
         {
             if (string.IsNullOrWhiteSpace(motionType)) return 0;
             string s = motionType.Trim().ToLowerInvariant();
-            if (s.Contains("line")) return 1;
-            if (s.Contains("arc") && s.Contains("cw")) return 2;
-            if (s.Contains("arc") && s.Contains("ccw")) return 3;
-            if (s.Contains("cung")) return 2; // generic arc
-            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam")) return 4;
+            
+            // Theo bảng lệnh Hex:
+            // Line (Đường thẳng): 0x100A (Positioning complete)
+            // Arc CW (Cung thuận chiều): 0x100F
+            // Arc CCW (Cung ngược chiều): 0x1010
+            
+            if (s.Contains("line") || s.Contains("đường") || s.Contains("duong")) return 0x100A;
+            if (s.Contains("arc") && s.Contains("ccw")) return 0x1010;
+            if (s.Contains("arc") && s.Contains("cw")) return 0x100F;
+            if (s.Contains("arc") || s.Contains("cung")) return 0x100F; // Mặc định cung thuận chiều
+            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam") || s.Contains("tròn") || s.Contains("tron")) return 0x100F;
+            
             return 0;
         }
 
