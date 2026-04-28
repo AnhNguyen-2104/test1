@@ -211,6 +211,7 @@
             this.btnWriteSetDevice32.UseVisualStyleBackColor = true;
             this.btnWriteSetDevice32.Click += new System.EventHandler(this.btnWriteSetDevice32_Click);
 
+
             // 
             // lblStartIO
             // 

@@ -38,17 +38,66 @@ namespace test1
         {
             try
             {
-                int startIO = int.Parse(txtStartIO.Text.Trim());
-                int gAddr = int.Parse(txtBufferAddress.Text.Trim()); // Ví dụ: 2006
-                int val = int.Parse(txtValue.Text.Trim());
+                if (!EnsureConnected()) return;
+                if (!TryParseInput(txtStartIO.Text, "Start IO", out int startIO)) return;
+                if (!TryParseInput(txtBufferAddress.Text, "G Addr", out int address)) return;
+                if (!TryParseInput(txtValue.Text, "Gia tri", out int val)) return;
 
-                // Sử dụng hàm ghi 32-bit đã xử lý Low/High
-                int res = plcComm.WriteInt32ToBuffer(startIO, gAddr, val);
+                int res = plcComm.WriteInt32ToBuffer(startIO, address, val);
 
-                if (res == 0) MessageBox.Show($"Ghi thành công: G{gAddr}(L) và G{gAddr + 1}(H)");
-                else MessageBox.Show($"Lỗi: {plcComm.GetErrorMessage(res)}");
+                if (res == 0)
+                    MessageBox.Show("Ghi thanh cong qua WriteBuffer.");
+                else
+                    MessageBox.Show($"Loi PLC: {plcComm.GetErrorMessage(res)}");
             }
-            catch (Exception ex) { MessageBox.Show("Kiểm tra lại dữ liệu nhập: " + ex.Message); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Lỗi: " + ex.Message);
+            }
+        }
+
+        private void btnWriteSetDevice32_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (!EnsureConnected()) return;
+                string path = txtDeviceName.Text.Trim();
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    MessageBox.Show("Device Path khong duoc de trong.");
+                    return;
+                }
+
+                if (!TryParseInput(txtValue.Text, "Gia tri", out int val)) return;
+
+                string method;
+                int res = plcComm.WriteInt32ToDevicePath(path, val, out method);
+
+                if (res == 0)
+                    MessageBox.Show($"Ghi thanh cong qua {method}");
+                else
+                    MessageBox.Show($"Loi PLC: {plcComm.GetErrorMessage(res)}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Loi: " + ex.Message);
+            }
+        }
+
+        private bool EnsureConnected()
+        {
+            if (plcComm != null && plcComm.IsConnected) return true;
+
+            MessageBox.Show("Chua ket noi PLC.");
+            return false;
+        }
+
+        private bool TryParseInput(string rawValue, string fieldName, out int value)
+        {
+            if (int.TryParse(rawValue.Trim(), out value)) return true;
+
+            MessageBox.Show($"{fieldName} khong hop le.");
+            return false;
         }
 
         private void btnRead_Click(object sender, EventArgs e)
