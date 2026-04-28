@@ -78,6 +78,28 @@ namespace test1
             throw new Exception($"Lỗi ReadDevice: {result}");
         }
 
+        public int ReadDeviceValue(string deviceName)
+        {
+            if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
+
+            int value = 0;
+            int result = plcDevice.GetDevice(deviceName, out value);
+            if (result == 0) return value;
+
+            throw new Exception($"Lỗi GetDevice {deviceName}: {GetErrorMessage(result)}");
+        }
+
+        public void WriteDeviceValue(string deviceName, int value)
+        {
+            if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
+
+            int result = plcDevice.SetDevice(deviceName, value);
+            if (result != 0)
+            {
+                throw new Exception($"Lỗi SetDevice {deviceName}: {GetErrorMessage(result)}");
+            }
+        }
+
         /// <summary>
         /// Ghi dữ liệu vào Buffer Memory module thông minh.
         /// Xử lý triệt để lỗi "Could not convert argument 0".
