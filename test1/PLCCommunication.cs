@@ -248,14 +248,16 @@ namespace test1
             {
                 short sStart = Convert.ToInt16(startIO);
                 int writeSize = data.Length; // number of 16-bit words
-                
-                // Convert short[] to object[] for COM compatibility
-                object[] bufObj = new object[data.Length];
+
+                // Create a System.Array of Int16 to ensure proper COM SAFEARRAY marshaling
+                Array bufArr = Array.CreateInstance(typeof(short), data.Length);
                 for (int i = 0; i < data.Length; i++)
                 {
-                    bufObj[i] = (int)data[i]; // Convert short to int for COM
+                    bufArr.SetValue(data[i], i);
                 }
-                
+
+                object bufObj = (object)bufArr;
+
                 int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
                 return result;
             }
