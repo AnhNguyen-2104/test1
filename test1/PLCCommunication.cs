@@ -1,7 +1,7 @@
 ﻿using System;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
-using System.Reflection;
 
 namespace test1
 {
@@ -85,24 +85,14 @@ namespace test1
         public int WriteBuffer(int startIO, int address, short[] data)
         {
             if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
-            Type comType = plcDevice.GetType();
+            if (data == null || data.Length == 0) throw new ArgumentException("Khong co du lieu de ghi.", nameof(data));
             try
             {
-                object s = (short)startIO; // Ép kiểu short bắt buộc cho Argument 0
-                object addr = (int)address;
-                object size = (int)data.Length;
-                object buf = data;
-
-                ParameterModifier pm = new ParameterModifier(4);
-                pm[3] = true; // Truyền SAFEARRAY bằng ref
-
-                object ret = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null,
-                    plcDevice, new object[] { s, addr, size, buf }, new ParameterModifier[] { pm }, null, null);
-                return ret != null ? Convert.ToInt32(ret) : 0;
+                return plcDevice.WriteBuffer(startIO, address, data.Length, ref data[0]);
             }
             catch (Exception ex)
             {
-                throw new Exception($"Lỗi WriteBuffer: {ex.Message}");
+                throw new Exception($"Lỗi WriteBuffer: {GetInnermostMessage(ex)}");
             }
         }
 
@@ -127,7 +117,7 @@ namespace test1
             {
                 // Buffer memory Ux\Gy 32-bit must be written as Low word first, then High word.
                 usedMethod = "WriteBuffer (Low word -> High word)";
-                return WriteInt32ToBuffer(uNum / 16, gAddr, value);
+                return WriteInt32ToBuffer(uNum, gAddr, value);
             }
             usedMethod = "SetDevice";
             return plcDevice.SetDevice(devicePath, value);
@@ -137,9 +127,16 @@ namespace test1
         {
             uNumber = 0; gAddress = 0;
             string s = devicePath.Replace("\\\\", "\\").Trim();
-            var m = Regex.Match(s, @"^U(\d+)\\G(\d+)$", RegexOptions.IgnoreCase);
+            var m = Regex.Match(s, @"^U([0-9A-F]+)\\G(\d+)$", RegexOptions.IgnoreCase);
             if (!m.Success) return false;
-            return int.TryParse(m.Groups[1].Value, out uNumber) && int.TryParse(m.Groups[2].Value, out gAddress);
+            return int.TryParse(m.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uNumber)
+                && int.TryParse(m.Groups[2].Value, out gAddress);
+        }
+
+        private static string GetInnermostMessage(Exception ex)
+        {
+            while (ex.InnerException != null) ex = ex.InnerException;
+            return ex.Message;
         }
 
         public string GetErrorMessage(int errorCode)
