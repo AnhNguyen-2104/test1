@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.Reflection;
 
 namespace test1
 {
@@ -258,8 +259,27 @@ namespace test1
 
                 object bufObj = (object)bufArr;
 
-                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
-                return result;
+                try
+                {
+                    // Primary attempt: dynamic COM call (works for many environments)
+                    int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
+                    return result;
+                }
+                catch (Exception primaryEx)
+                {
+                    // Fallback: use reflection to invoke method, passing the System.Array directly
+                    try
+                    {
+                        var comType = plcDevice.GetType();
+                        object[] args = new object[] { sStart, address, writeSize, bufArr };
+                        object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args);
+                        return Convert.ToInt32(invoked);
+                    }
+                    catch (Exception reflectEx)
+                    {
+                        throw new Exception($"WriteBuffer failed at U{startIO} G{address}: {primaryEx.Message} | fallback: {reflectEx.Message}");
+                    }
+                }
             }
             catch (Exception ex)
             {
