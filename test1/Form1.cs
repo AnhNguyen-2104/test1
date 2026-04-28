@@ -1108,7 +1108,8 @@ namespace test1
                 }
             }
 
-            processRows = rows;
+            processRows.Clear();
+            processRows.AddRange(rows);
 
             await PushDxfStateAsync();
             await NotifyAsync("success", "DXF", $"Đã biên dịch {rows.Count} lệnh di chuyển vào bảng process.");
