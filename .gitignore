@@ -365,3 +365,6 @@ FodyWeavers.xsd
 /test1/obj
 /test1/.vs
 /test1/.vscode
+/test1/.bak
+/test1/.dwl
+/test1/.dwl2
