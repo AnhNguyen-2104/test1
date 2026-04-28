@@ -245,46 +245,112 @@ namespace test1
             if (data == null)
                 throw new ArgumentNullException(nameof(data));
 
+            short sStart = Convert.ToInt16(startIO);
+            int writeSize = data.Length; // number of 16-bit words
+
+            List<Exception> errors = new List<Exception>();
+
+            // Candidate buffer representations
+            object bufShortArray = (object)data; // short[] boxed
+
+            Array bufArr = Array.CreateInstance(typeof(short), data.Length);
+            for (int i = 0; i < data.Length; i++) bufArr.SetValue(data[i], i);
+
+            // object[] of boxed Int32 (some COM servers expect 32-bit elements)
+            object[] bufObjectInts = new object[data.Length];
+            for (int i = 0; i < data.Length; i++) bufObjectInts[i] = (int)data[i];
+
+            // object[] of boxed Int16
+            object[] bufObjectShorts = new object[data.Length];
+            for (int i = 0; i < data.Length; i++) bufObjectShorts[i] = data[i];
+
+            // Try 1: dynamic call with short[]
             try
             {
-                short sStart = Convert.ToInt16(startIO);
-                int writeSize = data.Length; // number of 16-bit words
-
-                // Create a System.Array of Int16 to ensure proper COM SAFEARRAY marshaling
-                Array bufArr = Array.CreateInstance(typeof(short), data.Length);
-                for (int i = 0; i < data.Length; i++)
-                {
-                    bufArr.SetValue(data[i], i);
-                }
-
-                object bufObj = (object)bufArr;
-
-                try
-                {
-                    // Primary attempt: dynamic COM call (works for many environments)
-                    int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
-                    return result;
-                }
-                catch (Exception primaryEx)
-                {
-                    // Fallback: use reflection to invoke method, passing the System.Array directly
-                    try
-                    {
-                        var comType = plcDevice.GetType();
-                        object[] args = new object[] { sStart, address, writeSize, bufArr };
-                        object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args);
-                        return Convert.ToInt32(invoked);
-                    }
-                    catch (Exception reflectEx)
-                    {
-                        throw new Exception($"WriteBuffer failed at U{startIO} G{address}: {primaryEx.Message} | fallback: {reflectEx.Message}");
-                    }
-                }
+                object dynBuf = bufShortArray;
+                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref dynBuf);
+                return result;
             }
             catch (Exception ex)
             {
-                throw new Exception($"WriteBuffer failed at U{startIO} G{address}: {ex.Message}");
+                errors.Add(ex);
             }
+
+            // Try 2: dynamic call with System.Array (Int16)
+            try
+            {
+                object dynBuf = bufArr;
+                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref dynBuf);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+
+            // Try 3: dynamic call with object[] of ints
+            try
+            {
+                object dynBuf = bufObjectInts;
+                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref dynBuf);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+
+            // Try 4: reflection invoke with various startIO types and buffer types
+            var comType = plcDevice.GetType();
+            object[][] bufCandidates = new object[][] { new object[] { bufShortArray }, new object[] { bufArr }, new object[] { bufObjectInts }, new object[] { bufObjectShorts } };
+            foreach (object[] bufCandWrapper in bufCandidates)
+            {
+                object bufCandidate = bufCandWrapper[0];
+
+                // Try startIO as short
+                try
+                {
+                    object[] args = new object[] { sStart, address, writeSize, bufCandidate };
+                    object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args);
+                    if (invoked != null)
+                        return Convert.ToInt32(invoked);
+                }
+                catch (TargetInvocationException tie)
+                {
+                    errors.Add(tie.InnerException ?? tie);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                }
+
+                // Try startIO as int
+                try
+                {
+                    object[] args = new object[] { (int)startIO, address, writeSize, bufCandidate };
+                    object invoked = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null, plcDevice, args);
+                    if (invoked != null)
+                        return Convert.ToInt32(invoked);
+                }
+                catch (TargetInvocationException tie)
+                {
+                    errors.Add(tie.InnerException ?? tie);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                }
+            }
+
+            // If all attempts failed, throw aggregated exception with messages
+            var aggMsg = new System.Text.StringBuilder();
+            aggMsg.AppendLine($"WriteBuffer failed at U{startIO} G{address}. Attempts:");
+            for (int i = 0; i < errors.Count; i++)
+            {
+                aggMsg.AppendLine($"[{i}] {errors[i].GetType().Name}: {errors[i].Message}");
+            }
+
+            throw new Exception(aggMsg.ToString());
         }
 
         /// <summary>
