@@ -58,6 +58,16 @@ namespace test1
 
         private void btnWriteSetDevice32_Click(object sender, EventArgs e)
         {
+            WriteInt32Value();
+        }
+
+        private void btnWrite_Click(object sender, EventArgs e)
+        {
+            WriteInt32Value();
+        }
+
+        private void WriteInt32Value()
+        {
             try
             {
                 if (!EnsureConnected()) return;

@@ -210,6 +210,7 @@
             this.btnWriteSetDevice32.Text = "Write (SetDevice 32-bit)";
             this.btnWriteSetDevice32.UseVisualStyleBackColor = true;
             this.btnWriteSetDevice32.Click += new System.EventHandler(this.btnWriteSetDevice32_Click);
+            this.btnWriteSetDevice32.Visible = false;
 
 
             // 
@@ -221,6 +222,7 @@
             this.lblStartIO.Size = new System.Drawing.Size(47, 13);
             this.lblStartIO.TabIndex = 11;
             this.lblStartIO.Text = "Start IO:";
+            this.lblStartIO.Visible = false;
 
             // 
             // txtStartIO
@@ -230,6 +232,7 @@
             this.txtStartIO.Size = new System.Drawing.Size(60, 20);
             this.txtStartIO.TabIndex = 12;
             this.txtStartIO.Text = "0";
+            this.txtStartIO.Visible = false;
 
             // 
             // lblBufferAddress
@@ -240,6 +243,7 @@
             this.lblBufferAddress.Size = new System.Drawing.Size(46, 13);
             this.lblBufferAddress.TabIndex = 13;
             this.lblBufferAddress.Text = "G Addr:";
+            this.lblBufferAddress.Visible = false;
 
             // 
             // txtBufferAddress
@@ -249,6 +253,7 @@
             this.txtBufferAddress.Size = new System.Drawing.Size(60, 20);
             this.txtBufferAddress.TabIndex = 14;
             this.txtBufferAddress.Text = "2006";
+            this.txtBufferAddress.Visible = false;
 
             // 
             // btnWriteBuffer
@@ -260,6 +265,7 @@
             this.btnWriteBuffer.Text = "Write (WriteBuffer)";
             this.btnWriteBuffer.UseVisualStyleBackColor = true;
             this.btnWriteBuffer.Click += new System.EventHandler(this.btnWriteBuffer_Click);
+            this.btnWriteBuffer.Visible = false;
 
             // 
             // btnRead
@@ -275,12 +281,13 @@
             // 
             // btnWrite (generic)
             // 
-            this.btnWrite.Location = new System.Drawing.Point(118, 310);
+            this.btnWrite.Location = new System.Drawing.Point(230, 224);
             this.btnWrite.Name = "btnWriteGeneric";
-            this.btnWrite.Size = new System.Drawing.Size(100, 30);
+            this.btnWrite.Size = new System.Drawing.Size(142, 25);
             this.btnWrite.TabIndex = 17;
-            this.btnWrite.Text = "Write";
+            this.btnWrite.Text = "Gui du lieu 32-bit";
             this.btnWrite.UseVisualStyleBackColor = true;
+            this.btnWrite.Click += new System.EventHandler(this.btnWrite_Click);
 
 
             // 
@@ -288,6 +295,7 @@
             // 
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(800, 600);
+            this.AcceptButton = this.btnWrite;
             this.Controls.Add(this.btnWrite);
             this.Controls.Add(this.btnRead);
             this.Controls.Add(this.btnWriteBuffer);
