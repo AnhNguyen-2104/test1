@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/CAD_Test
+/GantrySCADA/bin
+/GantrySCADA/obj
+/GantrySCADA/.vs
+/GantrySCADA/.vscode
