@@ -23,6 +23,7 @@ namespace test1
 
         private readonly WebView2 webView;
         private readonly Timer plcPollTimer = new Timer();
+
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer
         {
             MaxJsonLength = int.MaxValue,

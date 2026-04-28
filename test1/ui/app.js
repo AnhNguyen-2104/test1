@@ -22,6 +22,7 @@ const state = {
   }
 };
 
+
 const dom = {};
 let modalSubmit = null;
 

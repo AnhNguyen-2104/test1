@@ -122,6 +122,7 @@ namespace test1
         /// Ghi số 32-bit theo thứ tự Low Word -> High Word.
         /// Ví dụ: G2006 (L) và G2007 (H).
         /// </summary>
+        /// 
         public int WriteInt32ToBuffer(int startIO, int address, int value)
         {
             short[] sData = new short[2];
