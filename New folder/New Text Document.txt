@@ -1,0 +1,30 @@
+public int WriteBuffer(int startIO, int address, short[] data)
+{
+    // ... kiểm tra kết nối ...
+
+    int writeSize = data.Length;
+    
+    // Ép kiểu startIO về short một cách tường minh trước khi gọi
+    short sStart = (short)startIO; 
+    
+    try
+    {
+        // Chuyển mảng short[] thành object để truyền vào tham số 'ref object lpData'
+        object bufObj = data; 
+        
+        // Gọi trực tiếp với kiểu dữ liệu chuẩn
+        int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
+        return result;
+    }
+    catch (Exception ex)
+    {
+        // Nếu vẫn lỗi, thử phương án dự phòng dùng mảng int (một số phiên bản MX Component yêu cầu)
+        try {
+            int[] iData = Array.ConvertAll(data, s => (int)s);
+            object iBufObj = iData;
+            return plcDevice.WriteBuffer(sStart, address, writeSize, ref iBufObj);
+        } catch {
+            throw new Exception($"WriteBuffer failed: {ex.Message}");
+        }
+    }
+}
