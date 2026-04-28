@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace test1
 {
@@ -19,7 +20,7 @@ namespace test1
         {
             IPAddress = ipAddress;
             Port = port;
-            
+
             try
             {
                 // Create instance of ActUtlType from the Mitsubishi library
@@ -255,14 +256,50 @@ namespace test1
         }
 
         /// <summary>
+        /// Read raw buffer words from function module buffer using ReadBuffer
+        /// Returns an array of 16-bit words read (length = size) and ActUtlType result code via out parameter
+        /// </summary>
+        public short[] ReadBuffer(int startIO, int address, int size, out int resultCode)
+        {
+            if (!isConnected)
+                throw new InvalidOperationException("Not connected to PLC");
+
+            if (size <= 0)
+                throw new ArgumentOutOfRangeException(nameof(size));
+
+            try
+            {
+                short[] data = new short[size];
+                object obj = data; // prepare for ref
+                int result = plcDevice.ReadBuffer(startIO, address, size, ref obj);
+                resultCode = result;
+
+                if (result == 0)
+                {
+                    // obj should be a short[] filled by COM
+                    return (short[])obj;
+                }
+                else
+                {
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"ReadBuffer failed at U{startIO} G{address}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Helper to write a single 32-bit signed integer to buffer address (split into 2 words)
         /// - startIO: Start I/O (e.g., 0 for U0)
         /// - address: buffer address (e.g., 2006 for G2006)
         /// Returns ActUtlType result code (0 = success)
+        /// Default ordering is LowWord then HighWord.
         /// </summary>
         public int WriteInt32ToBuffer(int startIO, int address, int value)
         {
-            // Split into low and high 16-bit words
+            // Split into low and high 16-bit words (low first)
             short[] sData = new short[2];
             sData[0] = (short)(value & 0xFFFF);         // low word
             sData[1] = (short)((value >> 16) & 0xFFFF); // high word
@@ -271,16 +308,209 @@ namespace test1
         }
 
         /// <summary>
-        /// Convenience method: write 32-bit value to device path like "U0\\G2006"
+        /// Alternate ordering: HighWord then LowWord. Some modules expect word order reversed.
+        /// Use this if low-first produces incorrect large values.
+        /// </summary>
+        public int WriteInt32ToBufferHighFirst(int startIO, int address, int value)
+        {
+            short[] sData = new short[2];
+            sData[0] = (short)((value >> 16) & 0xFFFF); // high word
+            sData[1] = (short)(value & 0xFFFF);         // low word
+            return WriteBuffer(startIO, address, sData);
+        }
+
+        /// <summary>
+        /// Convenience method: write 32-bit value to device path like "U0\G2006"
         /// Returns ActUtlType result code (0 = success).
+        /// Overload added to auto-detect and fallback if SetDevice doesn't write full 32-bit.
         /// </summary>
         public int WriteInt32ToDevicePath(string devicePath, int value)
         {
+            string used;
+            return WriteInt32ToDevicePath(devicePath, value, out used);
+        }
+
+        /// <summary>
+        /// Write 32-bit to device path with verification and fallback.
+        /// If devicePath matches Ux\Gyyyy, tries SetDevice then verifies by ReadBuffer; if verification fails falls back to WriteBufferAuto.
+        /// 'usedMethod' returns which approach succeeded: "SetDevice", "WriteBuffer:LowFirst", "WriteBuffer:HighFirst" or empty on failure.
+        /// </summary>
+        public int WriteInt32ToDevicePath(string devicePath, int value, out string usedMethod)
+        {
+            usedMethod = string.Empty;
             if (string.IsNullOrEmpty(devicePath))
                 throw new ArgumentNullException(nameof(devicePath));
 
-            // If device path like "U0\\G2006", try SetDevice directly which supports 32-bit
-            return SetDeviceRaw(devicePath, value);
+            // Try parse U\G pattern
+            if (TryParseUDevicePath(devicePath, out int uNum, out int gAddr))
+            {
+                // Attempt SetDevice first (simpler)
+                int setRes = SetDeviceRaw(devicePath, value);
+
+                // compute startIO param for WriteBuffer/ReadBuffer: U number divided by 16 (as advised)
+                int startIO = uNum / 16;
+
+                if (setRes == 0)
+                {
+                    // verify by reading buffer words
+                    int readCode;
+                    var (low, high) = ReadInt32FromBuffer(startIO, gAddr, out readCode);
+                    if (readCode == 0)
+                    {
+                        int combined = CombineWordsLowHigh((ushort)low, (ushort)high);
+                        if (combined == value)
+                        {
+                            usedMethod = "SetDevice";
+                            return 0;
+                        }
+                    }
+
+                    // SetDevice wrote only lower word (common), fallback to WriteBufferAuto
+                    int buffRes = WriteInt32ToBufferAuto(startIO, gAddr, value, out string usedOrder);
+                    if (buffRes == 0)
+                    {
+                        usedMethod = "WriteBuffer:" + usedOrder;
+                        return 0;
+                    }
+
+                    // both attempts failed
+                    usedMethod = "SetDeviceThenBufferFailed";
+                    return buffRes != 0 ? buffRes : -1;
+                }
+                else
+                {
+                    // SetDevice returned error, try WriteBuffer directly
+                    int buffRes = WriteInt32ToBufferAuto(startIO, gAddr, value, out string usedOrder);
+                    if (buffRes == 0)
+                    {
+                        usedMethod = "WriteBuffer:" + usedOrder;
+                        return 0;
+                    }
+
+                    usedMethod = "SetDeviceErrorThenBufferFailed";
+                    return setRes;
+                }
+            }
+
+            // Not a U/G buffer address - call SetDevice directly
+            int res = SetDeviceRaw(devicePath, value);
+            if (res == 0)
+                usedMethod = "SetDevice";
+            return res;
+        }
+
+        /// <summary>
+        /// Read two words (low, high) from G address for convenience
+        /// Returns tuple: (lowWord, highWord) and result code via out param
+        /// </summary>
+        public (int low, int high) ReadInt32FromBuffer(int startIO, int address, out int resultCode)
+        {
+            short[] data = ReadBuffer(startIO, address, 2, out resultCode);
+            if (resultCode != 0 || data == null)
+                return (0, 0);
+
+            int low = (ushort)data[0];
+            int high = (ushort)data[1];
+            return (low, high);
+        }
+
+        /// <summary>
+        /// Helper to combine two 16-bit words into a 32-bit unsigned int
+        /// low = first word, high = second word
+        /// </summary>
+        private static int CombineWordsLowHigh(ushort low, ushort high)
+        {
+            return (int)((uint)high << 16 | (uint)low);
+        }
+
+        /// <summary>
+        /// Helper to combine two 16-bit words into a 32-bit when ordering is HighLow
+        /// high = first word, low = second word
+        /// </summary>
+        private static int CombineWordsHighLow(ushort first, ushort second)
+        {
+            return (int)((uint)first << 16 | (uint)second);
+        }
+
+        /// <summary>
+        /// Attempt to write 32-bit value to buffer and verify by reading back.
+        /// Tries low-first ordering first; if verification fails tries high-first ordering.
+        /// Returns ActUtlType result code (0 = success). 'usedOrder' returns "LowFirst" or "HighFirst" when successful.
+        /// </summary>
+        public int WriteInt32ToBufferAuto(int startIO, int address, int value, out string usedOrder)
+        {
+            usedOrder = "";
+
+            // First try low-first
+            int res = WriteInt32ToBuffer(startIO, address, value);
+            if (res != 0)
+                return res;
+
+            // Read back
+            int readCode;
+            var (low, high) = ReadInt32FromBuffer(startIO, address, out readCode);
+            if (readCode == 0)
+            {
+                int combined = CombineWordsLowHigh((ushort)low, (ushort)high);
+                if (combined == value)
+                {
+                    usedOrder = "LowFirst";
+                    return 0;
+                }
+            }
+
+            // Try high-first
+            res = WriteInt32ToBufferHighFirst(startIO, address, value);
+            if (res != 0)
+                return res;
+
+            (low, high) = ReadInt32FromBuffer(startIO, address, out readCode);
+            if (readCode == 0)
+            {
+                int combined = CombineWordsHighLow((ushort)low, (ushort)high);
+                if (combined == value)
+                {
+                    usedOrder = "HighFirst";
+                    return 0;
+                }
+            }
+
+            // If both attempts fail, return last readCode or res
+            return readCode != 0 ? readCode : -1;
+        }
+
+        /// <summary>
+        /// Try to parse device path like "U0\\G2006" or "U0\G2006" and return U number and G address.
+        /// Returns true if parsed.
+        /// </summary>
+        private static bool TryParseUDevicePath(string devicePath, out int uNumber, out int gAddress)
+        {
+            uNumber = 0;
+            gAddress = 0;
+            if (string.IsNullOrEmpty(devicePath))
+                return false;
+
+            // Normalize slashes
+            string s = devicePath.Trim();
+            s = s.Replace("\\\\", "\\"); // collapsed escapes
+
+            // Pattern: U<number>\G<number>
+            var m = Regex.Match(s, "^U(\\d+)\\\\G(\\d+)$", RegexOptions.IgnoreCase);
+            if (!m.Success)
+            {
+                // try single backslash (textboxes will usually contain single backslash)
+                m = Regex.Match(s, "^U(\\d+)\\G(\\d+)$", RegexOptions.IgnoreCase);
+            }
+
+            if (!m.Success)
+                return false;
+
+            if (!int.TryParse(m.Groups[1].Value, out uNumber))
+                return false;
+            if (!int.TryParse(m.Groups[2].Value, out gAddress))
+                return false;
+
+            return true;
         }
 
         /// <summary>

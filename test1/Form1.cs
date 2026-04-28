@@ -95,10 +95,11 @@ namespace test1
 
             try
             {
-                int result = plcComm.WriteInt32ToDevicePath(devicePath, value);
+                string usedMethod;
+                int result = plcComm.WriteInt32ToDevicePath(devicePath, value, out usedMethod);
                 if (result == 0)
                 {
-                    MessageBox.Show($"SetDevice write successful to {devicePath}", "Success");
+                    MessageBox.Show($"Write successful to {devicePath} via {usedMethod}", "Success");
                 }
                 else
                 {
@@ -133,10 +134,11 @@ namespace test1
 
             try
             {
-                int result = plcComm.WriteInt32ToBuffer(startIO, gaddr, value);
+                string usedOrder;
+                int result = plcComm.WriteInt32ToBufferAuto(startIO, gaddr, value, out usedOrder);
                 if (result == 0)
                 {
-                    MessageBox.Show($"WriteBuffer write successful to U{startIO} G{gaddr}", "Success");
+                    MessageBox.Show($"WriteBuffer write successful to U{startIO} G{gaddr} (order: {usedOrder})", "Success");
                 }
                 else
                 {
