@@ -404,177 +404,92 @@ function renderPointsTable() {
   const points = state.dxf.points || [];
   const primitives = state.dxf.primitives || [];
   const rows = [];
-  const processed = new Array(points.length).fill(false);
-
-  const toLower = (s) => (s || '').toLowerCase();
-
-  const isCenterType = (lt) => /circle|tâm|tam|center/.test(lt);
-  const isArcType = (lt) => /arc|cung/.test(lt);
-  const isLineType = (lt) => /line|polyline|polyline2d|polyline2d/.test(lt);
-  const isIntersectionType = (lt) => /giao|intersection|vertex|giao điểm/.test(lt) && !isArcType(lt) && !isCenterType(lt);
-
-  function findNearby(index, predicate, maxDistance = 8) {
-    const n = points.length;
-    for (let d = 0; d <= maxDistance; d++) {
-      const j1 = index + d;
-      if (j1 < n && !processed[j1] && predicate(toLower(points[j1].lineType))) return j1;
-      if (d > 0) {
-        const j2 = index - d;
-        if (j2 >= 0 && !processed[j2] && predicate(toLower(points[j2].lineType))) return j2;
-      }
-    }
-    return -1;
+  
+  function findPointKey(x, y) {
+    const eps = 1e-3;
+    const pt = points.find(p => Math.abs((p.x || 0) - x) < eps && Math.abs((p.y || 0) - y) < eps);
+    return pt ? pt.key : '';
   }
 
-  function distance(a, b) {
-    return Math.sqrt(Math.pow((a.x || 0) - (b.x || 0), 2) + Math.pow((a.y || 0) - (b.y || 0), 2));
+  function findPointIndex(x, y) {
+    const eps = 1e-3;
+    const pt = points.find(p => Math.abs((p.x || 0) - x) < eps && Math.abs((p.y || 0) - y) < eps);
+    return pt && pt.index != null ? pt.index : '';
   }
 
-  function findCircumferencePoint(center) {
-    // try points first
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      if (!pt) continue;
-      if (toLower(pt.lineType).includes('circle') || toLower(pt.lineType).includes('tâm') || toLower(pt.lineType).includes('tam')) continue;
-      const d = distance(center, pt);
-      if (d > 1e-3) return pt;
+  let autoIndex = 1;
+
+  for (let i = 0; i < primitives.length; i++) {
+    const prim = primitives[i];
+    if (!prim.points || prim.points.length === 0) continue;
+
+    let displayType = 'Line';
+    if ((prim.sourceType || '').toLowerCase().includes('arc')) displayType = 'Cung tròn';
+    if ((prim.sourceType || '').toLowerCase().includes('circle')) displayType = 'Hình tròn';
+    
+    let cx = '', cy = '';
+    if (prim.center) {
+        cx = Number(prim.center.x).toFixed(3);
+        cy = Number(prim.center.y).toFixed(3);
     }
-    // fallback to primitives points
-    for (let i = 0; i < primitives.length; i++) {
-      const prim = primitives[i];
-      if (!prim || !prim.points) continue;
-      for (let j = 0; j < prim.points.length; j++) {
-        const pt = prim.points[j];
-        if (!pt) continue;
-        const d = Math.sqrt(Math.pow((pt.x || 0) - (center.x || 0), 2) + Math.pow((pt.y || 0) - (center.y || 0), 2));
-        if (d > 1e-3) return { x: pt.x, y: pt.y, xDisplay: (pt.x != null ? pt.x : ''), yDisplay: (pt.y != null ? pt.y : ''), key: '', index: '' };
-      }
+    
+    if (displayType === 'Line') {
+       // Loop through all points in the polyline/line, creating a segment for each pair
+       for (let j = 0; j < prim.points.length - 1; j++) {
+           const s = prim.points[j];
+           const e = prim.points[j + 1];
+           
+           const key = findPointKey(s.x, s.y);
+           const stt = findPointIndex(s.x, s.y) || autoIndex++;
+           
+           const sx = Number(s.x).toFixed(3);
+           const sy = Number(s.y).toFixed(3);
+           const ex = Number(e.x).toFixed(3);
+           const ey = Number(e.y).toFixed(3);
+
+           rows.push(`
+             <tr data-point-key="${escapeHtml(key)}">
+               <td>${escapeHtml(stt)}</td>
+               <td>${escapeHtml(displayType)}</td>
+               <td>${escapeHtml(sx)}</td>
+               <td>${escapeHtml(sy)}</td>
+               <td>${escapeHtml(ex)}</td>
+               <td>${escapeHtml(ey)}</td>
+               <td></td>
+               <td></td>
+             </tr>
+           `);
+       }
+    } else {
+       // Arc/Circle: output ONE row showing start and end
+       const s = prim.points[0];
+       const e = prim.points[prim.points.length - 1];
+       
+       const key = findPointKey(s.x, s.y);
+       const stt = findPointIndex(s.x, s.y) || autoIndex++;
+       
+       const sx = Number(s.x).toFixed(3);
+       const sy = Number(s.y).toFixed(3);
+       const ex = Number(e.x).toFixed(3);
+       const ey = Number(e.y).toFixed(3);
+
+       rows.push(`
+         <tr data-point-key="${escapeHtml(key)}">
+           <td>${escapeHtml(stt)}</td>
+           <td>${escapeHtml(displayType)}</td>
+           <td>${escapeHtml(sx)}</td>
+           <td>${escapeHtml(sy)}</td>
+           <td>${escapeHtml(ex)}</td>
+           <td>${escapeHtml(ey)}</td>
+           <td>${escapeHtml(cx)}</td>
+           <td>${escapeHtml(cy)}</td>
+         </tr>
+       `);
     }
-    // as last resort return center itself
-    return center;
-  }
-
-  for (let i = 0; i < points.length; i++) {
-    if (processed[i]) continue;
-    const p = points[i];
-    const lt = toLower(p.lineType);
-
-    // Always list intersection/polyline points individually, labeling lines as 'Line'
-    if (isIntersectionType(lt) || isLineType(lt)) {
-      const displayType = isLineType(lt) ? 'Line' : (p.lineType || 'Point');
-      rows.push(`
-        <tr data-point-key="${escapeHtml(p.key || '')}">
-          <td>${escapeHtml(p.index != null ? String(p.index) : '')}</td>
-          <td>${escapeHtml(displayType)}</td>
-          <td>${escapeHtml(p.xDisplay || String(p.x || ''))}</td>
-          <td>${escapeHtml(p.yDisplay || String(p.y || ''))}</td>
-          <td></td>
-          <td></td>
-          <td></td>
-          <td></td>
-        </tr>
-      `);
-      processed[i] = true;
-      continue;
-    }
-
-    // Arc/circle grouping
-    if (isArcType(lt) || isCenterType(lt)) {
-      let startIdx = -1, endIdx = -1, centerIdx = -1;
-
-      if (isArcType(lt) && !isCenterType(lt)) startIdx = i;
-      if (isCenterType(lt)) centerIdx = i;
-
-      if (startIdx === -1) startIdx = findNearby(i, (s) => isArcType(s) && !isCenterType(s));
-      if (endIdx === -1) endIdx = findNearby(i + 1, (s) => isArcType(s) && !isCenterType(s));
-      if (centerIdx === -1) centerIdx = findNearby(i, (s) => isCenterType(s));
-
-      // widen search
-      if (startIdx === -1) startIdx = findNearby(i, (s) => isArcType(s), points.length);
-      if (endIdx === -1) {
-        for (let j = 0; j < points.length; j++) {
-          if (processed[j]) continue;
-          if (j === startIdx) continue;
-          const qlt = toLower(points[j].lineType);
-          if (isArcType(qlt) && !isCenterType(qlt)) { endIdx = j; break; }
-        }
-      }
-
-      const start = startIdx >= 0 ? points[startIdx] : null;
-      const end = endIdx >= 0 ? points[endIdx] : null;
-      const center = centerIdx >= 0 ? points[centerIdx] : null;
-
-      const almostEqual = (a, b, eps = 1e-3) => Math.abs((a || 0) - (b || 0)) <= eps;
-      const isFullCircle = start && end && almostEqual(start.x, end.x) && almostEqual(start.y, end.y);
-
-      if (isFullCircle || (!start && !end && center)) {
-        // choose a circumference point to act as start/end
-        const repCenter = center || start || p;
-        const circPt = findCircumferencePoint(repCenter);
-        const sx = circPt.xDisplay || (circPt.x != null ? String(circPt.x) : '');
-        const sy = circPt.yDisplay || (circPt.y != null ? String(circPt.y) : '');
-
-        rows.push(`
-          <tr data-point-key="${escapeHtml((circPt.key || repCenter.key) || '')}">
-            <td>${escapeHtml(repCenter.index != null ? String(repCenter.index) : '')}</td>
-            <td>Hình tròn</td>
-            <td>${escapeHtml(sx)}</td>
-            <td>${escapeHtml(sy)}</td>
-            <td>${escapeHtml(sx)}</td>
-            <td>${escapeHtml(sy)}</td>
-            <td>${escapeHtml(repCenter.xDisplay || String(repCenter.x || ''))}</td>
-            <td>${escapeHtml(repCenter.yDisplay || String(repCenter.y || ''))}</td>
-          </tr>
-        `);
-
-        if (startIdx >= 0) processed[startIdx] = true;
-        if (endIdx >= 0) processed[endIdx] = true;
-        if (centerIdx >= 0) processed[centerIdx] = true;
-        continue;
-      }
-
-      // normal arc with distinct start/end
-      const s = start || end || p;
-      const e = end || start || (start ? start : null);
-
-      rows.push(`
-        <tr data-point-key="${escapeHtml(s.key || '')}">
-          <td>${escapeHtml(s.index != null ? String(s.index) : '')}</td>
-          <td>Cung tròn</td>
-          <td>${escapeHtml(s.xDisplay || String(s.x || ''))}</td>
-          <td>${escapeHtml(s.yDisplay || String(s.y || ''))}</td>
-          <td>${escapeHtml(e && e.xDisplay ? e.xDisplay : '')}</td>
-          <td>${escapeHtml(e && e.yDisplay ? e.yDisplay : '')}</td>
-          <td>${escapeHtml(center && center.xDisplay ? center.xDisplay : '')}</td>
-          <td>${escapeHtml(center && center.yDisplay ? center.yDisplay : '')}</td>
-        </tr>
-      `);
-
-      if (startIdx >= 0) processed[startIdx] = true;
-      if (endIdx >= 0) processed[endIdx] = true;
-      if (centerIdx >= 0) processed[centerIdx] = true;
-
-      continue;
-    }
-
-    // fallback
-    rows.push(`
-      <tr data-point-key="${escapeHtml(p.key || '')}">
-        <td>${escapeHtml(p.index != null ? String(p.index) : '')}</td>
-        <td>${escapeHtml(p.lineType || '')}</td>
-        <td>${escapeHtml(p.xDisplay || String(p.x || ''))}</td>
-        <td>${escapeHtml(p.yDisplay || String(p.y || ''))}</td>
-        <td></td>
-        <td></td>
-        <td></td>
-        <td></td>
-      </tr>
-    `);
-    processed[i] = true;
   }
 
   dom.pointsBody.innerHTML = rows.join('');
-  dom.pointsEmpty.classList.toggle('hidden', rows.length > 0);
+  dom.pointsEmpty.classList.toggle('hidden', rows.length === 0);
 }
 
 function renderProcessTable() {

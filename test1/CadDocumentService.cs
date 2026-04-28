@@ -77,7 +77,11 @@ namespace test1
             if (arc != null)
             {
                 List<PointF> arcPoints = SampleArc(arc, transform);
-                context.AddPrimitive("Arc", arcPoints, false);
+                // netDxf Arc always CCW from StartAngle to EndAngle, unless we calculate cross product or something. 
+                // Wait, DXF Arcs are always CCW in OCS. We can assume IsCw = false for now, or check sweep.
+                bool isCw = false; 
+                CadCoordinate center = new CadCoordinate(transform.Apply(arc.Center).X, transform.Apply(arc.Center).Y);
+                context.AddPrimitive("Arc", arcPoints, false, center, isCw, false);
                 if (arcPoints.Count > 0)
                 {
                     context.AddCandidatePoint(arcPoints[0], "Đầu cung", "Arc", 2);
@@ -89,7 +93,8 @@ namespace test1
             Circle circle = entity as Circle;
             if (circle != null)
             {
-                context.AddPrimitive("Circle", SampleCircle(circle, transform), true);
+                CadCoordinate center = new CadCoordinate(transform.Apply(circle.Center).X, transform.Apply(circle.Center).Y);
+                context.AddPrimitive("Circle", SampleCircle(circle, transform), true, center, false, true);
                 context.AddCandidatePoint(transform.Apply(circle.Center), "Tâm circle", "Circle", 3);
                 return;
             }
@@ -216,6 +221,9 @@ namespace test1
         {
             public string SourceType { get; set; }
             public List<CadCoordinate> Points { get; set; }
+            public CadCoordinate Center { get; set; }
+            public bool IsCw { get; set; }
+            public bool IsCircle { get; set; }
         }
 
         public sealed class CadPointData
@@ -257,7 +265,7 @@ namespace test1
             public List<CadPrimitiveData> Primitives { get; } = new List<CadPrimitiveData>();
             public List<LineSegment> LineSegments { get; } = new List<LineSegment>();
 
-            public void AddPrimitive(string sourceType, IEnumerable<PointF> points, bool closeLoop)
+            public void AddPrimitive(string sourceType, IEnumerable<PointF> points, bool closeLoop, CadCoordinate center = null, bool isCw = false, bool isCircle = false)
             {
                 List<PointF> list = points.ToList();
                 if (list.Count == 0)
@@ -277,7 +285,10 @@ namespace test1
                     Primitives.Add(new CadPrimitiveData
                     {
                         SourceType = sourceType,
-                        Points = list.Select(p => new CadCoordinate(p.X, p.Y)).ToList()
+                        Points = list.Select(p => new CadCoordinate(p.X, p.Y)).ToList(),
+                        Center = center,
+                        IsCw = isCw,
+                        IsCircle = isCircle
                     });
                 }
             }

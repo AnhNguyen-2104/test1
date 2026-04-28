@@ -402,6 +402,15 @@ namespace test1
                 try
                 {
                     LoadCadDocument(dialog.FileName);
+                    if (activeCadDocument != null && activeCadDocument.Primitives != null)
+                    {
+                        var paths = GetConnectedPathsFromCad(activeCadDocument.Primitives);
+                        activeCadDocument.Primitives.Clear();
+                        foreach (var path in paths)
+                        {
+                            activeCadDocument.Primitives.AddRange(path);
+                        }
+                    }
                     currentView = "dxf";
                     await PushDxfStateAsync();
                     await NotifyAsync("success", "DXF", "Đã tải file DXF.");
@@ -413,61 +422,46 @@ namespace test1
             }
         }
 
-        private async Task HandleAssignPointAsync(string slot, string key)
+        private async Task HandleAssignPointAsync(string slot, string pointKey)
         {
-            if (activeCadDocument == null || activeCadDocument.Points == null || activeCadDocument.Points.Count == 0)
-            {
-                await NotifyAsync("info", "DXF", "Chưa có dữ liệu DXF.");
-                return;
-            }
-
-            CadDocumentService.CadPointData point = activeCadDocument.Points.FirstOrDefault(item => string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrEmpty(pointKey)) return;
+            var point = activeCadDocument?.Points?.FirstOrDefault(p => string.Equals(p.Key, pointKey, StringComparison.OrdinalIgnoreCase));
             if (point == null)
             {
                 await NotifyAsync("info", "DXF", "Hãy chọn một điểm trước khi gán.");
                 return;
             }
 
-            ProcessRow row = GetProcessRow(slot);
-            if (row == null)
-            {
-                return;
-            }
-
             assignedPointKeys[slot] = point.Key;
             selectedCadPointKey = point.Key;
-            row.EndCoordinate = FormatPoint(point);
 
             await PushDxfStateAsync();
         }
 
+        private string globalZDown = "";
+        private string globalZSafe = "";
+
         private async Task HandleProcessValueAsync(string key, string value)
         {
-            ProcessRow row = GetProcessRow(key);
-            if (row == null)
+            if (string.Equals(key, "speed", StringComparison.OrdinalIgnoreCase))
             {
-                return;
-            }
-
-            value = (value ?? string.Empty).Trim();
-
-            switch (key)
-            {
-                case "zDown":
-                case "zSafe":
-                    row.MCodeValue = value;
-                    break;
-
-                case "speed":
+                // Áp dụng tốc độ cho toàn bộ các lệnh chạy
+                foreach (var row in processRows)
+                {
                     row.Speed = value;
-                    break;
-
-                default:
-                    row.MCodeValue = value;
-                    break;
+                }
             }
-
+            else if (string.Equals(key, "zDown", StringComparison.OrdinalIgnoreCase))
+            {
+                globalZDown = value;
+            }
+            else if (string.Equals(key, "zSafe", StringComparison.OrdinalIgnoreCase))
+            {
+                globalZSafe = value;
+            }
+            
             await PushDxfStateAsync();
+            await NotifyAsync("success", "Cấu hình", $"Đã cập nhật {key} = {value}");
         }
 
         private void LoadCadDocument(string filePath)
@@ -480,9 +474,6 @@ namespace test1
         private void ResetPointAssignments()
         {
             assignedPointKeys.Clear();
-            GetProcessRow("start").EndCoordinate = string.Empty;
-            GetProcessRow("glueStart").EndCoordinate = string.Empty;
-            GetProcessRow("glueEnd").EndCoordinate = string.Empty;
         }
 
         private async void PlcPollTimer_Tick(object sender, EventArgs e)
@@ -717,7 +708,10 @@ namespace test1
                         {
                             x = point.X,
                             y = point.Y
-                        }).ToList()
+                        }).ToList(),
+                        center = primitive.Center != null ? new { x = primitive.Center.X, y = primitive.Center.Y } : null,
+                        isCw = primitive.IsCw,
+                        isCircle = primitive.IsCircle
                     }).ToList(),
                 points = activeCadDocument == null
                     ? new List<object>()
@@ -925,16 +919,18 @@ namespace test1
             if (string.IsNullOrWhiteSpace(motionType)) return 0;
             string s = motionType.Trim().ToLowerInvariant();
             
+            bool isEnd = s.Contains("end") || !s.Contains("cont"); // Mặc định là END nếu không chỉ định rõ Continuous
+
             // Theo bảng lệnh Hex:
-            // Line (Đường thẳng): 0x100A (Positioning complete)
-            // Arc CW (Cung thuận chiều): 0x100F
-            // Arc CCW (Cung ngược chiều): 0x1010
+            // Line (Đường thẳng): 0x100A (END), 0xD00A (Continuous Path)
+            // Arc CW (Cung thuận chiều): 0x100F (END), 0xD00F (Continuous Path)
+            // Arc CCW (Cung ngược chiều): 0x1010 (END), 0xD010 (Continuous Path)
             
-            if (s.Contains("line") || s.Contains("đường") || s.Contains("duong")) return 0x100A;
-            if (s.Contains("arc") && s.Contains("ccw")) return 0x1010;
-            if (s.Contains("arc") && s.Contains("cw")) return 0x100F;
-            if (s.Contains("arc") || s.Contains("cung")) return 0x100F; // Mặc định cung thuận chiều
-            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam") || s.Contains("tròn") || s.Contains("tron")) return 0x100F;
+            if (s.Contains("line") || s.Contains("đường") || s.Contains("duong")) return isEnd ? 0x100A : 0xD00A;
+            if (s.Contains("arc") && s.Contains("ccw")) return isEnd ? 0x1010 : 0xD010;
+            if (s.Contains("arc") && s.Contains("cw")) return isEnd ? 0x100F : 0xD00F;
+            if (s.Contains("arc") || s.Contains("cung")) return isEnd ? 0x100F : 0xD00F; // Mặc định cung thuận chiều
+            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam") || s.Contains("tròn") || s.Contains("tron")) return isEnd ? 0x100F : 0xD00F;
             
             return 0;
         }
@@ -947,78 +943,8 @@ namespace test1
                 return;
             }
 
-            // prefer to send all CAD points if available, otherwise fall back to processRows
-            List<ProcessRow> rowsToSend = new List<ProcessRow>();
-
-            if (activeCadDocument != null && activeCadDocument.Points != null && activeCadDocument.Points.Count > 0)
-            {
-                // build rows from CAD points
-                var pts = activeCadDocument.Points;
-
-                // try to locate a center points list (points marked as center/circle)
-                List<CadDocumentService.CadPointData> centers = pts.Where(p => !string.IsNullOrWhiteSpace(p.LineType) &&
-                    (p.LineType.IndexOf("circle", StringComparison.OrdinalIgnoreCase) >= 0 || p.LineType.IndexOf("tâm", StringComparison.OrdinalIgnoreCase) >= 0 || p.LineType.IndexOf("tam", StringComparison.OrdinalIgnoreCase) >= 0 || p.LineType.IndexOf("center", StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
-
-                for (int i = 0; i < pts.Count; i++)
-                {
-                    var p = pts[i];
-                    string lt = p.LineType ?? string.Empty;
-                    var row = new ProcessRow();
-
-                    if (lt.IndexOf("arc", StringComparison.OrdinalIgnoreCase) >= 0 || lt.IndexOf("cung", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        row.MotionType = "Arc";
-                        // choose next point as end if available, else use current point
-                        CadDocumentService.CadPointData endPt = (i + 1 < pts.Count) ? pts[i + 1] : p;
-                        row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", endPt.X, endPt.Y);
-
-                        // try to find a center (first center found)
-                        var c = centers.FirstOrDefault();
-                        if (c != null)
-                        {
-                            row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", c.X, c.Y);
-                        }
-                        else
-                        {
-                            row.CenterCoordinate = string.Empty;
-                        }
-                    }
-                    else if (lt.IndexOf("circle", StringComparison.OrdinalIgnoreCase) >= 0 || lt.IndexOf("tâm", StringComparison.OrdinalIgnoreCase) >= 0 || lt.IndexOf("tam", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        row.MotionType = "Circle";
-                        // center is this point; choose a circumference point if possible
-                        row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
-                        var circ = FindCircumferencePointFromPrimitives(activeCadDocument, p);
-                        if (circ != null)
-                        {
-                            row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", circ.X, circ.Y);
-                        }
-                        else
-                        {
-                            row.EndCoordinate = string.Empty;
-                        }
-                    }
-                    else
-                    {
-                        // line / point / intersection
-                        row.MotionType = "Line";
-                        row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
-                        row.CenterCoordinate = string.Empty;
-                    }
-
-                    // default other fields left empty (MCodeValue, Dwell, Speed) so they will be written as 0
-                    row.MCodeValue = row.MCodeValue ?? string.Empty;
-                    row.Dwell = row.Dwell ?? string.Empty;
-                    row.Speed = row.Speed ?? string.Empty;
-
-                    rowsToSend.Add(row);
-                }
-            }
-            else
-            {
-                // fallback to existing processRows
-                rowsToSend.AddRange(processRows);
-            }
+            // always use processRows
+            List<ProcessRow> rowsToSend = processRows;
 
             if (rowsToSend.Count == 0)
             {
@@ -1142,109 +1068,182 @@ namespace test1
 
         private async Task HandleImportCadToProcessAsync()
         {
-            if (activeCadDocument == null || activeCadDocument.Points == null || activeCadDocument.Points.Count == 0)
+            if (activeCadDocument == null || activeCadDocument.Primitives == null || activeCadDocument.Primitives.Count == 0)
             {
                 await NotifyAsync("info", "DXF", "Chưa có dữ liệu CAD.");
                 return;
             }
 
-            // We'll scan CAD points and try to map logical items to processRows.
-            var pts = activeCadDocument.Points;
-            var used = new bool[pts.Count];
-
-            int assignIndex = 0;
-
-            for (int i = 0; i < pts.Count && assignIndex < processRows.Count; i++)
+            var rows = BuildConnectedPathsFromCad();
+            if (rows.Count == 0)
             {
-                if (used[i]) continue;
-                var p = pts[i];
-                var lt = (p.LineType ?? string.Empty).ToLowerInvariant();
+                await NotifyAsync("info", "DXF", "Không tìm thấy đường chạy nào hợp lệ.");
+                return;
+            }
 
-                // Intersection / polyline vertex mapped as Line
-                if (lt.Contains("polyline") || lt.Contains("line") || lt.Contains("giao"))
+            // Lấy toạ độ điểm bật/tắt keo để chèn M Code
+            string glueStartCoord = null;
+            string glueEndCoord = null;
+
+            if (assignedPointKeys.TryGetValue("glueStart", out string gStartKey))
+            {
+                var pt = activeCadDocument.Points.FirstOrDefault(p => p.Key == gStartKey);
+                if (pt != null) glueStartCoord = FormatPoint(pt);
+            }
+            if (assignedPointKeys.TryGetValue("glueEnd", out string gEndKey))
+            {
+                var pt = activeCadDocument.Points.FirstOrDefault(p => p.Key == gEndKey);
+                if (pt != null) glueEndCoord = FormatPoint(pt);
+            }
+
+            foreach (var row in rows)
+            {
+                if (glueStartCoord != null && string.Equals(row.EndCoordinate, glueStartCoord))
                 {
-                    var row = processRows[assignIndex++];
-                    row.MotionType = "Line";
-                    row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
-                    row.CenterCoordinate = string.Empty;
-                    used[i] = true;
-                    continue;
+                    row.MCodeValue = "Bật keo";
                 }
-
-                // Arc or circle handling
-                if (lt.Contains("arc") || lt.Contains("cung") || lt.Contains("circle") || lt.Contains("tâm") || lt.Contains("tam"))
+                if (glueEndCoord != null && string.Equals(row.EndCoordinate, glueEndCoord))
                 {
-                    // find center point (if any)
-                    int centerIdx = -1;
-                    for (int j = 0; j < pts.Count; j++)
-                    {
-                        var lj = (pts[j].LineType ?? string.Empty).ToLowerInvariant();
-                        if (lj.Contains("circle") || lj.Contains("tâm") || lj.Contains("tam") || lj.Contains("center"))
-                        {
-                            centerIdx = j; break;
-                        }
-                    }
-
-                    // find endpoint pair: current and next arc point
-                    int startIdx = i;
-                    int endIdx = -1;
-                    for (int j = i + 1; j < pts.Count; j++)
-                    {
-                        var lj = (pts[j].LineType ?? string.Empty).ToLowerInvariant();
-                        if (lj.Contains("arc") || lj.Contains("cung")) { endIdx = j; break; }
-                    }
-
-                    // If no end found, maybe this is a circle center or a single point representing arc.
-                    var row = processRows[assignIndex++];
-                    row.MotionType = lt.Contains("circle") || lt.Contains("tâm") || lt.Contains("tam") ? "Circle" : "Arc";
-
-                    // Determine representative end point
-                    CadDocumentService.CadPointData startPt = pts[startIdx];
-                    CadDocumentService.CadPointData endPt = endIdx >= 0 ? pts[endIdx] : startPt;
-
-                    // If it's a full circle (start equals end) or only center exists, try to pick a circumference point
-                    if (endIdx < 0 || (Math.Abs(startPt.X - endPt.X) < 1e-3 && Math.Abs(startPt.Y - endPt.Y) < 1e-3))
-                    {
-                        // try to choose a point on circumference from primitives if available
-                        var circ = FindCircumferencePointFromPrimitives(activeCadDocument, centerIdx >= 0 ? pts[centerIdx] : startPt);
-                        if (circ != null)
-                        {
-                            startPt = circ;
-                            endPt = circ;
-                        }
-                    }
-
-                    row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", endPt.X, endPt.Y);
-                    if (centerIdx >= 0)
-                    {
-                        var c = pts[centerIdx];
-                        row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", c.X, c.Y);
-                        used[centerIdx] = true;
-                    }
-                    else
-                    {
-                        row.CenterCoordinate = string.Empty;
-                    }
-
-                    used[startIdx] = true;
-                    if (endIdx >= 0) used[endIdx] = true;
-
-                    continue;
-                }
-
-                // fallback: treat as point
-                if (!used[i])
-                {
-                    var row = processRows[assignIndex++];
-                    row.MotionType = p.LineType ?? "Point";
-                    row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
-                    row.CenterCoordinate = string.Empty;
-                    used[i] = true;
+                    row.MCodeValue = "Tắt keo";
                 }
             }
 
+            processRows = rows;
+
             await PushDxfStateAsync();
-            await NotifyAsync("success", "DXF", "Đã import tọa độ CAD vào bảng process.");
+            await NotifyAsync("success", "DXF", $"Đã biên dịch {rows.Count} lệnh di chuyển vào bảng process.");
+        }
+
+        private List<ProcessRow> BuildConnectedPathsFromCad()
+        {
+            var result = new List<ProcessRow>();
+            if (activeCadDocument == null || activeCadDocument.Primitives == null) return result;
+
+            var paths = GetConnectedPathsFromCad(activeCadDocument.Primitives);
+
+            foreach (var path in paths)
+            {
+                for (int pIdx = 0; pIdx < path.Count; pIdx++)
+                {
+                    var prim = path[pIdx];
+                    if (prim.Points == null || prim.Points.Count < 2) continue;
+
+                    // If primitive is Line or Polyline, emit its points
+                    if (prim.SourceType.Contains("Line") || prim.SourceType.Contains("Polyline"))
+                    {
+                        for (int i = 1; i < prim.Points.Count; i++) // skip first point since it's just the start
+                        {
+                            bool isLastInPrim = (i == prim.Points.Count - 1);
+                            bool isLastInPath = isLastInPrim && (pIdx == path.Count - 1);
+
+                            var row = new ProcessRow();
+                            row.MotionType = "Line" + (isLastInPath ? " (End)" : " (Continuous)");
+                            row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", prim.Points[i].X, prim.Points[i].Y);
+                            row.CenterCoordinate = string.Empty;
+                            result.Add(row);
+                        }
+                    }
+                    else if (prim.SourceType.Contains("Arc") || prim.SourceType.Contains("Circle"))
+                    {
+                        bool isLastInPath = (pIdx == path.Count - 1);
+                        var row = new ProcessRow();
+                        string arcType = prim.IsCw ? "Arc CW" : "Arc CCW";
+                        if (prim.SourceType.Contains("Circle")) arcType = "Circle";
+
+                        row.MotionType = arcType + (isLastInPath ? " (End)" : " (Continuous)");
+                        
+                        var endPt = prim.Points.Last();
+                        row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", endPt.X, endPt.Y);
+                        if (prim.Center != null)
+                        {
+                            row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", prim.Center.X, prim.Center.Y);
+                        }
+                        result.Add(row);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private List<List<CadDocumentService.CadPrimitiveData>> GetConnectedPathsFromCad(List<CadDocumentService.CadPrimitiveData> primitives)
+        {
+            var unassigned = new List<CadDocumentService.CadPrimitiveData>(primitives);
+            var paths = new List<List<CadDocumentService.CadPrimitiveData>>();
+
+            while (unassigned.Count > 0)
+            {
+                var currentPath = new List<CadDocumentService.CadPrimitiveData>();
+                var current = unassigned[0];
+                unassigned.RemoveAt(0);
+                currentPath.Add(current);
+
+                bool added = true;
+                while (added)
+                {
+                    added = false;
+                    var tailPrim = currentPath.Last();
+                    var headPrim = currentPath.First();
+
+                    if (tailPrim.Points == null || tailPrim.Points.Count == 0 || headPrim.Points == null || headPrim.Points.Count == 0) break;
+                    
+                    var tailPt = tailPrim.Points.Last();
+                    var headPt = headPrim.Points.First();
+
+                    for (int i = 0; i < unassigned.Count; i++)
+                    {
+                        var cand = unassigned[i];
+                        if (cand.Points == null || cand.Points.Count == 0) continue;
+
+                        var candStart = cand.Points.First();
+                        var candEnd = cand.Points.Last();
+
+                        // Try to attach to tail (Append)
+                        if (AreClose(tailPt, candStart))
+                        {
+                            currentPath.Add(cand);
+                            unassigned.RemoveAt(i);
+                            added = true;
+                            break;
+                        }
+                        else if (AreClose(tailPt, candEnd))
+                        {
+                            // Reverse candidate points
+                            cand.Points.Reverse();
+                            // If it's an Arc, reversing it means CW becomes CCW
+                            if (cand.SourceType.Contains("Arc")) cand.IsCw = !cand.IsCw;
+                            currentPath.Add(cand);
+                            unassigned.RemoveAt(i);
+                            added = true;
+                            break;
+                        }
+                        // Try to attach to head (Prepend)
+                        else if (AreClose(headPt, candEnd))
+                        {
+                            currentPath.Insert(0, cand);
+                            unassigned.RemoveAt(i);
+                            added = true;
+                            break;
+                        }
+                        else if (AreClose(headPt, candStart))
+                        {
+                            cand.Points.Reverse();
+                            if (cand.SourceType.Contains("Arc")) cand.IsCw = !cand.IsCw;
+                            currentPath.Insert(0, cand);
+                            unassigned.RemoveAt(i);
+                            added = true;
+                            break;
+                        }
+                    }
+                }
+                paths.Add(currentPath);
+            }
+            return paths;
+        }
+
+        private bool AreClose(CadDocumentService.CadCoordinate a, CadDocumentService.CadCoordinate b)
+        {
+            return Math.Abs(a.X - b.X) < 0.001 && Math.Abs(a.Y - b.Y) < 0.001;
         }
 
         private CadDocumentService.CadPointData FindCircumferencePointFromPrimitives(CadDocumentService.CadLoadResult doc, CadDocumentService.CadPointData center)
