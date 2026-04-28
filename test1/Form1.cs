@@ -1088,7 +1088,7 @@ namespace test1
                     string deviceMove = $"U0\\G{baseG + (n - 1) * stride + offsetMoveCode}";
                     string usedMove;
                     int rMove = plcComm.WriteInt32ToDevicePath(deviceMove, moveCode, out usedMove);
-                    AddLogEntry(deviceMove, moveCode.ToString(CultureInfo.InvariantCulture), "Write", rMove == 0 ? "OK" : $"Error({rMove})", "MoveCode:" + usedMove);
+                    AddLogEntry(deviceMove, "0x" + moveCode.ToString("X4"), "Write", rMove == 0 ? "OK" : $"Error({rMove})", "MoveCode:" + usedMove);
 
                     // write M code
                     string deviceM = $"U0\\G{baseG + (n - 1) * stride + offsetMCode}";
