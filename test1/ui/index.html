@@ -13,8 +13,8 @@
         <div class="brand-title">PRECISION SCADA</div>
         <nav class="top-nav">
           <button class="nav-link is-active" data-view="control">DASHBOARD</button>
-          <button class="nav-link" data-placeholder="LOGS">LOGS</button>
-          <button class="nav-link" data-placeholder="TELEMETRY">TELEMETRY</button>
+          <button class="nav-link" data-view="logs">LOGS</button>
+          <button class="nav-link" data-view="telemetry">TELEMETRY</button>
           <button class="nav-link" data-placeholder="SYSTEM SETTINGS">SYSTEM SETTINGS</button>
           <button class="nav-link" data-view="dxf">DXF RUN</button>
         </nav>
@@ -38,8 +38,8 @@
 
       <nav class="side-nav">
         <button class="side-link is-active" data-view="control">CONTROL</button>
-        <button class="side-link" data-placeholder="TELEMETRY">TELEMETRY</button>
-        <button class="side-link" data-placeholder="LOGS">LOGS</button>
+        <button class="side-link" data-view="telemetry">TELEMETRY</button>
+        <button class="side-link" data-view="logs">LOGS</button>
         <button class="side-link" data-placeholder="SETTINGS">SETTINGS</button>
         <button class="side-link" data-view="dxf">DXF RUN</button>
       </nav>
@@ -175,30 +175,72 @@
         </div>
       </section>
 
+      <section id="view-logs" class="view">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Logs</div>
+              <div class="panel-subtitle">Các giao dịch đọc/ghi PLC</div>
+            </div>
+            <div>
+              <button id="clear-logs-button" class="text-button">Clear</button>
+            </div>
+          </div>
+
+          <div class="table-frame">
+            <table class="data-table compact">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Dir</th>
+                  <th>Address</th>
+                  <th>Value</th>
+                  <th>Status</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody id="logs-table-body"></tbody>
+            </table>
+            <div id="logs-empty" class="empty-state">No logs yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-telemetry" class="view">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Telemetry</div>
+              <div class="panel-subtitle">Live D registers and Un\\Gx buffers</div>
+            </div>
+          </div>
+
+          <div id="telemetry-content" class="telemetry-content">
+            <!-- content populated by app.js renderTelemetry() -->
+            <div class="telemetry-empty">Không có dữ liệu telemetry. Kết nối PLC để kích hoạt.</div>
+          </div>
+
+          <div class="telemetry-actions" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
+            <input id="write-buffer-path" class="text-input compact" type="text" value="U0\\G2006" style="width:240px;" />
+            <input id="write-buffer-value" class="text-input compact" type="number" value="12345" style="width:140px;" />
+            <button id="write-buffer-button" class="primary-button compact">Write U0\\G2006</button>
+          </div>
+        </div>
+      </section>
+
       <section id="view-dxf" class="view">
         <div class="panel dxf-toolbar">
           <div class="toolbar-field toolbar-path">
-            <label class="field-label">Đường dẫn cad</label>
-            <input id="cad-path" class="text-input" type="text" readonly>
+            <input id="cad-path" class="text-input compact" type="text" placeholder="Đường dẫn cad" readonly>
           </div>
           <div class="toolbar-field toolbar-file">
-            <label class="field-label">Tên file</label>
-            <input id="cad-file" class="text-input" type="text" readonly>
+            <input id="cad-file" class="text-input compact" type="text" placeholder="Tên file" readonly>
           </div>
-          <button id="open-dxf" class="primary-button toolbar-open">Open</button>
+          <button id="open-dxf" class="primary-button toolbar-open compact">Open</button>
         </div>
 
         <div class="dxf-grid">
           <div class="panel panel-preview">
-            <div class="preview-hints">
-              <div class="hint-box">
-                Load file xong các điểm giao nhau có thể tích chọn và có thể nhấn nút điểm bắt đầu quy định đây là điểm bắt đầu điểm bơm keo, điểm kết thúc dừng bơm keo.
-              </div>
-              <div class="hint-box">
-                Z hạ là điểm bơm keo<br>
-                Z an toàn là mặt phẳng thoát
-              </div>
-            </div>
             <div class="preview-frame">
               <svg id="cad-preview" viewBox="0 0 1000 560" preserveAspectRatio="xMidYMid meet"></svg>
               <div id="cad-placeholder" class="preview-placeholder">View CAD</div>
@@ -207,13 +249,17 @@
 
           <div class="panel panel-points">
             <div class="table-frame tall">
-              <table class="data-table">
+              <table class="data-table compact points-table">
                 <thead>
                   <tr>
                     <th>STT</th>
                     <th>Loại đường</th>
-                    <th>Tọa độ X</th>
-                    <th>Tọa độ Y</th>
+                    <th>Bắt đầu X</th>
+                    <th>Bắt đầu Y</th>
+                    <th>Kết thúc X</th>
+                    <th>Kết thúc Y</th>
+                    <th>Tâm X</th>
+                    <th>Tâm Y</th>
                   </tr>
                 </thead>
                 <tbody id="points-table-body"></tbody>
@@ -232,13 +278,25 @@
                     <th>Giá trị M code</th>
                     <th>Dwell</th>
                     <th>Tốc độ</th>
-                    <th>Tọa độ cuối</th>
-                    <th>Tọa độ tâm</th>
+                    <th>Tọa độ cuối (X;Y)</th>
+                    <th>Tọa độ tâm (X;Y)</th>
                   </tr>
                 </thead>
                 <tbody id="process-table-body"></tbody>
               </table>
             </div>
+
+            <!-- Instruction / Notes area added -->
+            <div class="dxf-notes">
+              <div class="note-left">
+                <strong>Giá trị M code</strong>
+                <p>M code = 1 là bật bơm keo<br>M code = 2 là dừng bơm keo</p>
+              </div>
+              <div class="note-right">
+                <p>Đảm bảo 2 bảng này nhìn được hết dữ liệu (kéo thanh cuộn nếu cần).</p>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -250,6 +308,8 @@
             <button class="primary-button" data-process-key="zDown">Độ cao của Z hạ</button>
             <button class="primary-button" data-process-key="zSafe">Độ cao Z an toàn</button>
             <button class="primary-button" data-process-key="speed">Tốc độ</button>
+            <button id="import-cad-to-process-button" class="primary-button">Import CAD → Process</button>
+            <button id="send-cad-x-button" class="primary-button">Send CAD X</button>
           </div>
           <div class="action-group right">
             <button class="primary-button secondary-tone" data-run-action="resume">Resume</button>

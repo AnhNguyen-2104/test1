@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using System.Text;
 
 namespace test1
 {
@@ -33,6 +34,13 @@ namespace test1
         private readonly List<MonitorRow> monitorRows = new List<MonitorRow>();
         private readonly List<ProcessRow> processRows = new List<ProcessRow>();
         private readonly Dictionary<string, string> assignedPointKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // telemetry configuration: list of D registers and list of device ranges (e.g. "U0\\G2006" length 2)
+        private readonly List<string> telemetryRegisters = new List<string> { "D2000", "D2002", "D2004" };
+        private readonly List<TelemetryBuffer> telemetryBuffers = new List<TelemetryBuffer> { new TelemetryBuffer { Path = "U0\\G2006", Length = 2 } };
+
+        // simple in-memory log store for PLC I/O operations
+        private readonly List<LogEntry> logs = new List<LogEntry>();
 
         private PLCCommunication plcComm;
         private CadDocumentService.CadLoadResult activeCadDocument;
@@ -190,6 +198,39 @@ namespace test1
                     case "runAction":
                         await NotifyAsync("info", "DXF RUN", "Các nút Resume, Pause, Start đã có UI HTML. Phần map biến PLC sẽ nối tiếp ở bước sau.");
                         break;
+
+                    // telemetry control from UI
+                    case "addTelemetryRegister":
+                        await HandleAddTelemetryRegisterAsync(GetString(payload, "register"));
+                        break;
+
+                    case "removeTelemetryRegister":
+                        await HandleRemoveTelemetryRegisterAsync(GetString(payload, "register"));
+                        break;
+
+                    case "addTelemetryBuffer":
+                        await HandleAddTelemetryBufferAsync(GetString(payload, "path"), GetInt(payload, "length", 1));
+                        break;
+
+                    case "removeTelemetryBuffer":
+                        await HandleRemoveTelemetryBufferAsync(GetString(payload, "path"));
+                        break;
+
+                    case "writeBufferRequest":
+                        await HandleWriteBufferRequestAsync(GetString(payload, "path"), GetInt(payload, "value", 0));
+                        break;
+
+                    case "sendCadX":
+                        await HandleSendCadXAsync();
+                        break;
+
+                    case "importCadToProcess":
+                        await HandleImportCadToProcessAsync();
+                        break;
+
+                    case "clearLogs":
+                        await HandleClearLogsAsync();
+                        break;
                 }
             }
             catch (Exception ex)
@@ -250,10 +291,12 @@ namespace test1
                 {
                     plcComm.WriteDeviceValue(VelocityRegister, velocityValue);
                     UpdateIntegrityState(true);
+                    AddLogEntry(VelocityRegister, velocityValue.ToString(CultureInfo.InvariantCulture), "Write", "OK", "SetVelocity");
                 }
                 catch (Exception ex)
                 {
                     UpdateIntegrityFault(ex.Message);
+                    AddLogEntry(VelocityRegister, velocityValue.ToString(CultureInfo.InvariantCulture), "Write", "Error", ex.Message);
                     await NotifyAsync("error", "PLC", "Ghi tốc độ thất bại: " + ex.Message);
                 }
             }
@@ -307,14 +350,17 @@ namespace test1
             {
                 EnsureConnected();
                 string register = GetSequentialDevice(JogBaseRegister, offset);
-                plcComm.WriteDeviceValue(register, active ? 1 : 0);
+                int v = active ? 1 : 0;
+                plcComm.WriteDeviceValue(register, v);
                 UpdateIntegrityState(true);
+                AddLogEntry(register, v.ToString(CultureInfo.InvariantCulture), "Write", "OK", "Jog");
             }
             catch (Exception ex)
             {
                 if (active)
                 {
                     UpdateIntegrityFault(ex.Message);
+                    AddLogEntry(JogBaseRegister, (active ? 1 : 0).ToString(CultureInfo.InvariantCulture), "Write", "Error", ex.Message);
                     await NotifyAsync("error", "Jog", ex.Message);
                     await PushControlStateAsync();
                 }
@@ -327,6 +373,7 @@ namespace test1
             {
                 EnsureConnected();
                 plcComm.WriteDeviceValue(EmergencyStopRegister, 1);
+                AddLogEntry(EmergencyStopRegister, "1", "Write", "OK", "EmergencyStop");
                 UpdateIntegrityFault("Emergency stop triggered");
                 await PushControlStateAsync();
                 await NotifyAsync("error", "PLC", "Đã ghi emergency stop vào " + EmergencyStopRegister + ".");
@@ -334,6 +381,7 @@ namespace test1
             catch (Exception ex)
             {
                 UpdateIntegrityFault(ex.Message);
+                AddLogEntry(EmergencyStopRegister, "1", "Write", "Error", ex.Message);
                 await PushControlStateAsync();
                 await NotifyAsync("error", "PLC", ex.Message);
             }
@@ -469,6 +517,7 @@ namespace test1
             }
 
             await PushControlStateAsync();
+            await PushTelemetryStateAsync();
         }
 
         private void DisconnectPlc(bool updateUi = true)
@@ -558,7 +607,7 @@ namespace test1
 
         private Task PushAllStateAsync()
         {
-            return Task.WhenAll(PushControlStateAsync(), PushDxfStateAsync());
+            return Task.WhenAll(PushControlStateAsync(), PushDxfStateAsync(), PushTelemetryStateAsync(), PushLogsStateAsync());
         }
 
         private Task PushControlStateAsync()
@@ -709,15 +758,528 @@ namespace test1
             });
         }
 
-        private Task PostToUiAsync(string type, object payload)
+        private Task PushTelemetryStateAsync()
+        {
+            bool connected = plcComm != null && plcComm.IsConnected;
+            var dValues = new System.Collections.Generic.List<object>();
+            var buffers = new System.Collections.Generic.List<object>();
+
+            if (connected)
+            {
+                foreach (var reg in telemetryRegisters)
+                {
+                    try
+                    {
+                        int v = plcComm.ReadDeviceValue(reg);
+                        dValues.Add(new { register = reg, value = v, ok = true });
+                    }
+                    catch (Exception ex)
+                    {
+                        dValues.Add(new { register = reg, value = (int?)null, ok = false, error = ex.Message });
+                    }
+                }
+
+                foreach (var buf in telemetryBuffers)
+                {
+                    try
+                    {
+                        int[] arr = plcComm.ReadDeviceRange(buf.Path, buf.Length);
+                        buffers.Add(new { path = buf.Path, values = arr, ok = true });
+                    }
+                    catch (Exception ex)
+                    {
+                        buffers.Add(new { path = buf.Path, values = new int[0], ok = false, error = ex.Message });
+                    }
+                }
+            }
+
+            var payload = new
+            {
+                view = currentView,
+                theme = currentTheme,
+                connected,
+                dValues,
+                buffers
+            };
+
+            return PostToUiAsync("telemetry", payload);
+        }
+
+        private Task PushLogsStateAsync()
+        {
+            var outLogs = logs.Select(l => new
+            {
+                timestamp = l.Timestamp.ToString("o"),
+                direction = l.Direction,
+                address = l.Address,
+                value = l.Value,
+                status = l.Status,
+                message = l.Message
+            }).ToList();
+
+            var payload = new { view = currentView, theme = currentTheme, logs = outLogs };
+            return PostToUiAsync("logsState", payload);
+        }
+
+        private void AddLogEntry(string address, string value, string direction = "Write", string status = "OK", string message = null)
+        {
+            try
+            {
+                logs.Insert(0, new LogEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Direction = direction,
+                    Address = address,
+                    Value = value,
+                    Status = status,
+                    Message = message
+                });
+
+                // keep recent 500 entries
+                if (logs.Count > 500) logs.RemoveRange(500, logs.Count - 500);
+
+                // fire-and-forget push to UI
+                _ = PushLogsStateAsync();
+            }
+            catch
+            {
+                // ignore logging errors
+            }
+        }
+
+        private Task HandleClearLogsAsync()
+        {
+            logs.Clear();
+            return PushLogsStateAsync();
+        }
+
+        private async Task HandleAddTelemetryRegisterAsync(string register)
+        {
+            if (string.IsNullOrWhiteSpace(register)) return;
+            register = register.Trim().ToUpperInvariant();
+            if (telemetryRegisters.Exists(r => string.Equals(r, register, StringComparison.OrdinalIgnoreCase)))
+            {
+                await NotifyAsync("info", "Telemetry", "Register đã tồn tại.");
+                return;
+            }
+
+            telemetryRegisters.Add(register);
+            await PushTelemetryStateAsync();
+        }
+
+        private async Task HandleRemoveTelemetryRegisterAsync(string register)
+        {
+            if (string.IsNullOrWhiteSpace(register)) return;
+            var item = telemetryRegisters.Find(r => string.Equals(r, register, StringComparison.OrdinalIgnoreCase));
+            if (item != null) telemetryRegisters.Remove(item);
+            await PushTelemetryStateAsync();
+        }
+
+        private async Task HandleAddTelemetryBufferAsync(string path, int length)
+        {
+            if (string.IsNullOrWhiteSpace(path) || length <= 0) return;
+            telemetryBuffers.Add(new TelemetryBuffer { Path = path.Trim(), Length = Math.Max(1, length) });
+            await PushTelemetryStateAsync();
+        }
+
+        private async Task HandleRemoveTelemetryBufferAsync(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            var buf = telemetryBuffers.FirstOrDefault(b => string.Equals(b.Path, path, StringComparison.OrdinalIgnoreCase));
+            if (buf != null) telemetryBuffers.Remove(buf);
+            await PushTelemetryStateAsync();
+        }
+
+        private async Task HandleWriteBufferRequestAsync(string path, int value)
+        {
+            if (plcComm == null || !plcComm.IsConnected)
+            {
+                await NotifyAsync("error", "Telemetry", "PLC is not connected.");
+                return;
+            }
+
+            try
+            {
+                // For testing, attempt to write 32-bit as two words if possible
+                string used;
+                int result = plcComm.WriteInt32ToDevicePath(path, value, out used);
+                AddLogEntry(path, value.ToString(CultureInfo.InvariantCulture), "Write", result == 0 ? "OK" : $"Error({result})", used);
+                if (result == 0)
+                {
+                    await NotifyAsync("success", "Telemetry", $"Ghi thành công {path} bằng {used}.");
+                }
+                else
+                {
+                    await NotifyAsync("error", "Telemetry", $"Ghi thất bại ({result}) bằng {used}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLogEntry(path, value.ToString(CultureInfo.InvariantCulture), "Write", "Error", ex.Message);
+                await NotifyAsync("error", "Telemetry", ex.Message);
+            }
+        }
+
+        private int MapMotionTypeToCode(string motionType)
+        {
+            if (string.IsNullOrWhiteSpace(motionType)) return 0;
+            string s = motionType.Trim().ToLowerInvariant();
+            if (s.Contains("line")) return 1;
+            if (s.Contains("arc") && s.Contains("cw")) return 2;
+            if (s.Contains("arc") && s.Contains("ccw")) return 3;
+            if (s.Contains("cung")) return 2; // generic arc
+            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam")) return 4;
+            return 0;
+        }
+
+        private async Task HandleSendCadXAsync()
+        {
+            if (plcComm == null || !plcComm.IsConnected)
+            {
+                await NotifyAsync("error", "Telemetry", "PLC is not connected.");
+                return;
+            }
+
+            // prefer to send all CAD points if available, otherwise fall back to processRows
+            List<ProcessRow> rowsToSend = new List<ProcessRow>();
+
+            if (activeCadDocument != null && activeCadDocument.Points != null && activeCadDocument.Points.Count > 0)
+            {
+                // build rows from CAD points
+                var pts = activeCadDocument.Points;
+
+                // try to locate a center points list (points marked as center/circle)
+                List<CadDocumentService.CadPointData> centers = pts.Where(p => !string.IsNullOrWhiteSpace(p.LineType) &&
+                    (p.LineType.IndexOf("circle", StringComparison.OrdinalIgnoreCase) >= 0 || p.LineType.IndexOf("tâm", StringComparison.OrdinalIgnoreCase) >= 0 || p.LineType.IndexOf("tam", StringComparison.OrdinalIgnoreCase) >= 0 || p.LineType.IndexOf("center", StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
+
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    var p = pts[i];
+                    string lt = p.LineType ?? string.Empty;
+                    var row = new ProcessRow();
+
+                    if (lt.IndexOf("arc", StringComparison.OrdinalIgnoreCase) >= 0 || lt.IndexOf("cung", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        row.MotionType = "Arc";
+                        // choose next point as end if available, else use current point
+                        CadDocumentService.CadPointData endPt = (i + 1 < pts.Count) ? pts[i + 1] : p;
+                        row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", endPt.X, endPt.Y);
+
+                        // try to find a center (first center found)
+                        var c = centers.FirstOrDefault();
+                        if (c != null)
+                        {
+                            row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", c.X, c.Y);
+                        }
+                        else
+                        {
+                            row.CenterCoordinate = string.Empty;
+                        }
+                    }
+                    else if (lt.IndexOf("circle", StringComparison.OrdinalIgnoreCase) >= 0 || lt.IndexOf("tâm", StringComparison.OrdinalIgnoreCase) >= 0 || lt.IndexOf("tam", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        row.MotionType = "Circle";
+                        // center is this point; choose a circumference point if possible
+                        row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
+                        var circ = FindCircumferencePointFromPrimitives(activeCadDocument, p);
+                        if (circ != null)
+                        {
+                            row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", circ.X, circ.Y);
+                        }
+                        else
+                        {
+                            row.EndCoordinate = string.Empty;
+                        }
+                    }
+                    else
+                    {
+                        // line / point / intersection
+                        row.MotionType = "Line";
+                        row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
+                        row.CenterCoordinate = string.Empty;
+                    }
+
+                    // default other fields left empty (MCodeValue, Dwell, Speed) so they will be written as 0
+                    row.MCodeValue = row.MCodeValue ?? string.Empty;
+                    row.Dwell = row.Dwell ?? string.Empty;
+                    row.Speed = row.Speed ?? string.Empty;
+
+                    rowsToSend.Add(row);
+                }
+            }
+            else
+            {
+                // fallback to existing processRows
+                rowsToSend.AddRange(processRows);
+            }
+
+            if (rowsToSend.Count == 0)
+            {
+                await NotifyAsync("info", "Telemetry", "Không có điểm để gửi.");
+                return;
+            }
+
+            const int baseG = 2000;
+            const int stride = 10;
+            // follow buffer mapping exactly for X axis
+            const int offsetMoveCode = 0; // U0\G(2000 + (n-1)*10 + 0)
+            const int offsetMCode = 1;    // U0\G(2000 + (n-1)*10 + 1)
+            const int offsetDwell = 2;    // U0\G(2000 + (n-1)*10 + 2)
+            const int offsetSpeed = 4;    // U0\G(2000 + (n-1)*10 + 4)
+            const int offsetPosX = 6;     // U0\G(2000 + (n-1)*10 + 6)  <-- Position X
+            const int offsetCenterX = 8;  // U0\G(2000 + (n-1)*10 + 8)  <-- Center X
+
+            int n = 1;
+            foreach (var row in rowsToSend)
+            {
+                // parse EndCoordinate and CenterCoordinate formatted as "X;Y"
+                int endX = 0;
+                int centerX = 0;
+                bool hasEnd = false;
+                bool hasCenter = false;
+
+                if (!string.IsNullOrWhiteSpace(row.EndCoordinate))
+                {
+                    var parts = row.EndCoordinate.Split(';');
+                    if (parts.Length >= 1 && double.TryParse(parts[0], NumberStyles.Any, CultureInfo.InvariantCulture, out double ex)) { endX = Convert.ToInt32(Math.Round(ex)); hasEnd = true; }
+                }
+                if (!string.IsNullOrWhiteSpace(row.CenterCoordinate))
+                {
+                    var parts = row.CenterCoordinate.Split(';');
+                    if (parts.Length >= 1 && double.TryParse(parts[0], NumberStyles.Any, CultureInfo.InvariantCulture, out double cx)) { centerX = Convert.ToInt32(Math.Round(cx)); hasCenter = true; }
+                }
+
+                // parse M code, dwell, speed
+                int mcodeVal = 0;
+                if (!string.IsNullOrWhiteSpace(row.MCodeValue))
+                {
+                    int parsed;
+                    if (int.TryParse(row.MCodeValue, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed)) mcodeVal = parsed;
+                }
+
+                int dwellVal = 0;
+                if (!string.IsNullOrWhiteSpace(row.Dwell))
+                {
+                    int parsed;
+                    if (int.TryParse(row.Dwell, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed)) dwellVal = parsed;
+                }
+
+                int speedVal = 0;
+                if (!string.IsNullOrWhiteSpace(row.Speed))
+                {
+                    int parsed;
+                    if (int.TryParse(row.Speed, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed)) speedVal = parsed;
+                }
+
+                int moveCode = MapMotionTypeToCode(row.MotionType);
+
+                string deviceBase = $"U0\\G{baseG + (n - 1) * stride}";
+
+                try
+                {
+                    // write move code
+                    string deviceMove = $"U0\\G{baseG + (n - 1) * stride + offsetMoveCode}";
+                    string usedMove;
+                    int rMove = plcComm.WriteInt32ToDevicePath(deviceMove, moveCode, out usedMove);
+                    AddLogEntry(deviceMove, moveCode.ToString(CultureInfo.InvariantCulture), "Write", rMove == 0 ? "OK" : $"Error({rMove})", "MoveCode:" + usedMove);
+
+                    // write M code
+                    string deviceM = $"U0\\G{baseG + (n - 1) * stride + offsetMCode}";
+                    string usedM;
+                    int rM = plcComm.WriteInt32ToDevicePath(deviceM, mcodeVal, out usedM);
+                    AddLogEntry(deviceM, mcodeVal.ToString(CultureInfo.InvariantCulture), "Write", rM == 0 ? "OK" : $"Error({rM})", "MCode:" + usedM);
+
+                    // write dwell
+                    string deviceDwell = $"U0\\G{baseG + (n - 1) * stride + offsetDwell}";
+                    string usedD;
+                    int rD = plcComm.WriteInt32ToDevicePath(deviceDwell, dwellVal, out usedD);
+                    AddLogEntry(deviceDwell, dwellVal.ToString(CultureInfo.InvariantCulture), "Write", rD == 0 ? "OK" : $"Error({rD})", "Dwell:" + usedD);
+
+                    // write speed
+                    string deviceSpeed = $"U0\\G{baseG + (n - 1) * stride + offsetSpeed}";
+                    string usedS;
+                    int rS = plcComm.WriteInt32ToDevicePath(deviceSpeed, speedVal, out usedS);
+                    AddLogEntry(deviceSpeed, speedVal.ToString(CultureInfo.InvariantCulture), "Write", rS == 0 ? "OK" : $"Error({rS})", "Speed:" + usedS);
+
+                    // write position X
+                    if (hasEnd)
+                    {
+                        string devicePosX = $"U0\\G{baseG + (n - 1) * stride + offsetPosX}";
+                        string usedX;
+                        int rX = plcComm.WriteInt32ToDevicePath(devicePosX, endX, out usedX);
+                        AddLogEntry(devicePosX, endX.ToString(CultureInfo.InvariantCulture), "Write", rX == 0 ? "OK" : $"Error({rX})", usedX);
+                        if (rX != 0) await NotifyAsync("error", "Telemetry", $"Ghi End X thất bại {devicePosX}: {rX}");
+                    }
+
+                    // write center X
+                    if (hasCenter)
+                    {
+                        string deviceCenterX = $"U0\\G{baseG + (n - 1) * stride + offsetCenterX}";
+                        string usedCx;
+                        int rCx = plcComm.WriteInt32ToDevicePath(deviceCenterX, centerX, out usedCx);
+                        AddLogEntry(deviceCenterX, centerX.ToString(CultureInfo.InvariantCulture), "Write", rCx == 0 ? "OK" : $"Error({rCx})", usedCx);
+                        if (rCx != 0) await NotifyAsync("error", "Telemetry", $"Ghi Center X thất bại {deviceCenterX}: {rCx}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddLogEntry(deviceBase, string.Empty, "Write", "Error", ex.Message);
+                    await NotifyAsync("error", "Telemetry", ex.Message);
+                }
+
+                n++;
+            }
+
+            await NotifyAsync("success", "Telemetry", "Đã gửi tọa độ trục X các điểm CAD xuống PLC.");
+        }
+
+        private async Task HandleImportCadToProcessAsync()
+        {
+            if (activeCadDocument == null || activeCadDocument.Points == null || activeCadDocument.Points.Count == 0)
+            {
+                await NotifyAsync("info", "DXF", "Chưa có dữ liệu CAD.");
+                return;
+            }
+
+            // We'll scan CAD points and try to map logical items to processRows.
+            var pts = activeCadDocument.Points;
+            var used = new bool[pts.Count];
+
+            int assignIndex = 0;
+
+            for (int i = 0; i < pts.Count && assignIndex < processRows.Count; i++)
+            {
+                if (used[i]) continue;
+                var p = pts[i];
+                var lt = (p.LineType ?? string.Empty).ToLowerInvariant();
+
+                // Intersection / polyline vertex mapped as Line
+                if (lt.Contains("polyline") || lt.Contains("line") || lt.Contains("giao"))
+                {
+                    var row = processRows[assignIndex++];
+                    row.MotionType = "Line";
+                    row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
+                    row.CenterCoordinate = string.Empty;
+                    used[i] = true;
+                    continue;
+                }
+
+                // Arc or circle handling
+                if (lt.Contains("arc") || lt.Contains("cung") || lt.Contains("circle") || lt.Contains("tâm") || lt.Contains("tam"))
+                {
+                    // find center point (if any)
+                    int centerIdx = -1;
+                    for (int j = 0; j < pts.Count; j++)
+                    {
+                        var lj = (pts[j].LineType ?? string.Empty).ToLowerInvariant();
+                        if (lj.Contains("circle") || lj.Contains("tâm") || lj.Contains("tam") || lj.Contains("center"))
+                        {
+                            centerIdx = j; break;
+                        }
+                    }
+
+                    // find endpoint pair: current and next arc point
+                    int startIdx = i;
+                    int endIdx = -1;
+                    for (int j = i + 1; j < pts.Count; j++)
+                    {
+                        var lj = (pts[j].LineType ?? string.Empty).ToLowerInvariant();
+                        if (lj.Contains("arc") || lj.Contains("cung")) { endIdx = j; break; }
+                    }
+
+                    // If no end found, maybe this is a circle center or a single point representing arc.
+                    var row = processRows[assignIndex++];
+                    row.MotionType = lt.Contains("circle") || lt.Contains("tâm") || lt.Contains("tam") ? "Circle" : "Arc";
+
+                    // Determine representative end point
+                    CadDocumentService.CadPointData startPt = pts[startIdx];
+                    CadDocumentService.CadPointData endPt = endIdx >= 0 ? pts[endIdx] : startPt;
+
+                    // If it's a full circle (start equals end) or only center exists, try to pick a circumference point
+                    if (endIdx < 0 || (Math.Abs(startPt.X - endPt.X) < 1e-3 && Math.Abs(startPt.Y - endPt.Y) < 1e-3))
+                    {
+                        // try to choose a point on circumference from primitives if available
+                        var circ = FindCircumferencePointFromPrimitives(activeCadDocument, centerIdx >= 0 ? pts[centerIdx] : startPt);
+                        if (circ != null)
+                        {
+                            startPt = circ;
+                            endPt = circ;
+                        }
+                    }
+
+                    row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", endPt.X, endPt.Y);
+                    if (centerIdx >= 0)
+                    {
+                        var c = pts[centerIdx];
+                        row.CenterCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", c.X, c.Y);
+                        used[centerIdx] = true;
+                    }
+                    else
+                    {
+                        row.CenterCoordinate = string.Empty;
+                    }
+
+                    used[startIdx] = true;
+                    if (endIdx >= 0) used[endIdx] = true;
+
+                    continue;
+                }
+
+                // fallback: treat as point
+                if (!used[i])
+                {
+                    var row = processRows[assignIndex++];
+                    row.MotionType = p.LineType ?? "Point";
+                    row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", p.X, p.Y);
+                    row.CenterCoordinate = string.Empty;
+                    used[i] = true;
+                }
+            }
+
+            await PushDxfStateAsync();
+            await NotifyAsync("success", "DXF", "Đã import tọa độ CAD vào bảng process.");
+        }
+
+        private CadDocumentService.CadPointData FindCircumferencePointFromPrimitives(CadDocumentService.CadLoadResult doc, CadDocumentService.CadPointData center)
+        {
+            if (doc == null || doc.Primitives == null) return null;
+            // choose a point from primitives that is not equal to center and at reasonable distance
+            foreach (var prim in doc.Primitives)
+            {
+                if (prim?.Points == null) continue;
+                foreach (var pt in prim.Points)
+                {
+                    if (pt == null) continue;
+                    double dx = pt.X - (center?.X ?? 0);
+                    double dy = pt.Y - (center?.Y ?? 0);
+                    double d = Math.Sqrt(dx * dx + dy * dy);
+                    if (d > 1e-3) // found a circumference-like point
+                    {
+                        return new CadDocumentService.CadPointData
+                        {
+                            X = pt.X,
+                            Y = pt.Y,
+                            XDisplay = pt.X.ToString(CultureInfo.InvariantCulture),
+                            YDisplay = pt.Y.ToString(CultureInfo.InvariantCulture),
+                            Key = Guid.NewGuid().ToString(),
+                            Index = -1,
+                            LineType = "circum"
+                        };
+                    }
+                }
+            }
+            return null;
+        }
+
+        private async Task PostToUiAsync(string type, object payload)
         {
             if (!webReady || webView.CoreWebView2 == null)
             {
-                return Task.CompletedTask;
+                return;
             }
 
             string json = serializer.Serialize(new { type, payload });
-            return webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+            await webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
         }
 
         private static Dictionary<string, object> GetMap(Dictionary<string, object> source, string key)
@@ -804,6 +1366,22 @@ namespace test1
             public string Speed { get; set; }
             public string EndCoordinate { get; set; }
             public string CenterCoordinate { get; set; }
+        }
+
+        private sealed class TelemetryBuffer
+        {
+            public string Path { get; set; }
+            public int Length { get; set; }
+        }
+
+        private sealed class LogEntry
+        {
+            public DateTime Timestamp { get; set; }
+            public string Direction { get; set; }
+            public string Address { get; set; }
+            public string Value { get; set; }
+            public string Status { get; set; }
+            public string Message { get; set; }
         }
     }
 }

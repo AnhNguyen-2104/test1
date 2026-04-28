@@ -607,16 +607,16 @@ html.theme-light .sidebar {
   min-height: 180px;
   border-radius: 18px;
   border: 1px solid var(--border);
-  overflow: hidden;
+  /* allow internal scrolling so sticky headers work and content isn't clipped */
+  overflow: auto;
   background: rgba(255, 255, 255, 0.02);
 }
 
 .table-frame.tall {
+  /* keep a reasonable max so it will scroll when content is long */
   min-height: 430px;
-}
-
-.table-frame.short {
-  min-height: 280px;
+  max-height: 520px;
+  overflow: auto;
 }
 
 .data-table {
@@ -635,7 +635,7 @@ html.theme-light .sidebar {
 .data-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 5;
   background: rgba(19, 31, 54, 0.98);
   font-size: 12px;
   color: var(--muted);
@@ -893,6 +893,41 @@ html.theme-light .data-table th {
   dominant-baseline: middle;
   pointer-events: none;
 }
+
+/* Telemetry panel styles */
+.telemetry-panel {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  width: 360px;
+  max-height: 44vh;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--card-shadow);
+  z-index: 60;
+}
+
+.telemetry-panel .telemetry-header {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.telemetry-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.telemetry-table th, .telemetry-table td { padding: 6px 8px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.telemetry-section { margin-bottom: 8px; }
+.telemetry-buffer { margin-bottom: 6px; font-size: 13px; color: var(--muted); }
+.buffer-path { font-weight: 700; }
+.buffer-values { margin-top: 4px; }
+.buffer-status { margin-top: 4px; font-size: 12px; }
+
+.hidden { display: none !important; }
 
 @media (max-width: 1600px) {
   .dashboard-grid {

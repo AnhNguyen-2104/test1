@@ -78,6 +78,139 @@ namespace test1
             throw new Exception($"Lỗi ReadDevice: {result}");
         }
 
+        /// <summary>
+        /// Read buffer memory (Un\Gx) using MX Component ReadBuffer if available.
+        /// Returns an int[] of length 'count' with values read from the buffer.
+        /// </summary>
+        public int[] ReadBuffer(int startIO, int address, int count)
+        {
+            if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
+            if (count <= 0) throw new ArgumentOutOfRangeException(nameof(count));
+
+            try
+            {
+                short[] outBuf = new short[count];
+                // attempt to call COM ReadBuffer: signature may vary by MX version
+                int result = plcDevice.ReadBuffer(startIO, address, count, ref outBuf[0]);
+                if (result != 0)
+                {
+                    throw new Exception($"ReadBuffer returned code: {result}");
+                }
+
+                int[] ints = new int[count];
+                for (int i = 0; i < count; i++) ints[i] = outBuf[i];
+                return ints;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Lỗi ReadBuffer: {GetInnermostMessage(ex)}");
+            }
+        }
+
+        /// <summary>
+        /// Read multiple consecutive device words and return them as int[].
+        /// Tries several strategies:
+        /// 1) If deviceName is Un\Gx, try ReadBuffer then fallback to per-word GetDevice.
+        /// 2) Try plcDevice.ReadDevice (multi-word read) if available.
+        /// 3) Fallback to plcDevice.GetDevice per sequential address.
+        /// </summary>
+        public int[] ReadDeviceRange(string deviceName, int count)
+        {
+            if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
+            if (string.IsNullOrWhiteSpace(deviceName)) throw new ArgumentNullException(nameof(deviceName));
+            if (count <= 0) throw new ArgumentOutOfRangeException(nameof(count));
+
+            // handle Un\Gx style device addresses first
+            if (TryParseUDevicePath(deviceName, out int uNumber, out int gAddress))
+            {
+                // try ReadBuffer (preferred)
+                try
+                {
+                    return ReadBuffer(uNumber, gAddress, count);
+                }
+                catch
+                {
+                    // fallback to per-word GetDevice on U\G paths
+                    try
+                    {
+                        int[] arr = new int[count];
+                        for (int i = 0; i < count; i++)
+                        {
+                            string path = $"U{uNumber}\\G{gAddress + i}";
+                            int value;
+                            int res = plcDevice.GetDevice(path, out value);
+                            if (res != 0)
+                            {
+                                throw new Exception($"GetDevice {path} returned {res}");
+                            }
+                            arr[i] = value;
+                        }
+                        return arr;
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new Exception($"Lỗi ReadDeviceRange (U device): {GetInnermostMessage(ex)}");
+                    }
+                }
+            }
+
+            // try ReadDevice (multi-word read) if available
+            try
+            {
+                object readValue = null;
+                int result = plcDevice.ReadDevice(deviceName, count, ref readValue);
+                if (result == 0)
+                {
+                    if (readValue is Array arr)
+                    {
+                        int[] outArr = new int[arr.Length];
+                        for (int i = 0; i < arr.Length; i++) outArr[i] = Convert.ToInt32(arr.GetValue(i), CultureInfo.InvariantCulture);
+                        return outArr;
+                    }
+                    return new int[] { Convert.ToInt32(readValue, CultureInfo.InvariantCulture) };
+                }
+            }
+            catch
+            {
+                // continue to fallback
+            }
+
+            // fallback: read each word individually via GetDevice using sequential device numbering
+            try
+            {
+                var match = Regex.Match(deviceName.Trim(), "^(?<prefix>[A-Za-z]+)(?<address>\\d+)$");
+                if (!match.Success)
+                {
+                    // single device name that isn't sequential - attempt GetDevice once
+                    int singleVal;
+                    int r = plcDevice.GetDevice(deviceName, out singleVal);
+                    if (r == 0) return new int[] { singleVal };
+                    throw new Exception($"GetDevice {deviceName} returned {r}");
+                }
+
+                string prefix = match.Groups["prefix"].Value;
+                int address = int.Parse(match.Groups["address"].Value, CultureInfo.InvariantCulture);
+                int[] resultArr = new int[count];
+                for (int i = 0; i < count; i++)
+                {
+                    string path = prefix + (address + i).ToString(CultureInfo.InvariantCulture);
+                    int val;
+                    int res = plcDevice.GetDevice(path, out val);
+                    if (res != 0)
+                    {
+                        throw new Exception($"GetDevice {path} returned {res}");
+                    }
+                    resultArr[i] = val;
+                }
+
+                return resultArr;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Lỗi ReadDeviceRange: {GetInnermostMessage(ex)}");
+            }
+        }
+
         public int ReadDeviceValue(string deviceName)
         {
             if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");

@@ -19,7 +19,8 @@ const state = {
     selectedPointKey: "",
     assignedPointKeys: {},
     processRows: []
-  }
+  },
+  telemetry: {}
 };
 
 
@@ -63,6 +64,8 @@ function cacheDom() {
   dom.addRegister = document.getElementById("add-register");
   dom.emergencyStop = document.getElementById("emergency-stop");
   dom.viewControl = document.getElementById("view-control");
+  dom.viewLogs = document.getElementById("view-logs");
+  dom.viewTelemetry = document.getElementById("view-telemetry");
   dom.viewDxf = document.getElementById("view-dxf");
   dom.openDxf = document.getElementById("open-dxf");
   dom.cadPath = document.getElementById("cad-path");
@@ -76,6 +79,13 @@ function cacheDom() {
   dom.processButtons = Array.from(document.querySelectorAll("[data-process-key]"));
   dom.runButtons = Array.from(document.querySelectorAll("[data-run-action]"));
   dom.toastContainer = document.getElementById("toast-container");
+  dom.telemetryContent = document.getElementById("telemetry-content");
+  dom.writeBufferPath = document.getElementById("write-buffer-path");
+  dom.writeBufferValue = document.getElementById("write-buffer-value");
+  dom.writeBufferButton = document.getElementById("write-buffer-button");
+  dom.logsBody = document.getElementById("logs-table-body");
+  dom.logsEmpty = document.getElementById("logs-empty");
+  dom.clearLogsButton = document.getElementById("clear-logs-button");
   dom.modal = document.getElementById("prompt-modal");
   dom.modalTitle = document.getElementById("modal-title");
   dom.modalLabel = document.getElementById("modal-label");
@@ -228,6 +238,50 @@ function bindEvents() {
     post("selectCadPoint", { key: state.dxf.selectedPointKey });
   });
 
+  // telemetry write buffer button
+  if (dom.writeBufferButton) {
+    dom.writeBufferButton.addEventListener('click', () => {
+      if (!state.control || !state.control.connection || !state.control.connection.connected) {
+        showToast('error', 'Telemetry', 'Chưa kết nối PLC. Không thể ghi.');
+        return;
+      }
+
+      const path = dom.writeBufferPath.value.trim();
+      const val = parseInt(dom.writeBufferValue.value, 10) || 0;
+
+      // use host message to request write
+      post('writeBufferRequest', { path, value: val });
+    });
+  }
+
+  // Import CAD -> Process button
+  const importCadBtn = document.getElementById('import-cad-to-process-button');
+  if (importCadBtn) {
+    importCadBtn.addEventListener('click', () => {
+      // copy CAD points into process rows as endCoordinate (X;Y)
+      post('importCadToProcess');
+    });
+  }
+
+  // send CAD X button in DXF view
+  const sendCadXBtn = document.getElementById('send-cad-x-button');
+  if (sendCadXBtn) {
+    sendCadXBtn.addEventListener('click', () => {
+      if (!state.control || !state.control.connection || !state.control.connection.connected) {
+        showToast('error', 'Telemetry', 'Chưa kết nối PLC. Không thể gửi CAD.');
+        return;
+      }
+
+      post('sendCadX');
+    });
+  }
+
+  if (dom.clearLogsButton) {
+    dom.clearLogsButton.addEventListener('click', () => {
+      post('clearLogs');
+    });
+  }
+
   dom.modalCancel.addEventListener("click", closePrompt);
   dom.modalConfirm.addEventListener("click", submitPrompt);
   dom.modal.addEventListener("click", (event) => {
@@ -267,6 +321,16 @@ function handleHostMessage(message) {
       applyTheme(state.theme);
       applyView(state.view);
       renderDxf();
+      break;
+
+    case "telemetry":
+      state.telemetry = message.payload || state.telemetry || {};
+      renderTelemetry();
+      break;
+
+    case "logsState":
+      state.logs = (message.payload && message.payload.logs) || [];
+      renderLogs();
       break;
 
     case "notify":
@@ -324,8 +388,12 @@ function renderMonitorTable() {
 }
 
 function renderDxf() {
-  syncInputValue(dom.cadPath, state.dxf.filePath || "");
-  syncInputValue(dom.cadFile, state.dxf.fileName || "");
+  syncInputValue(dom.cadPath, state.dxf.filePath || '');
+  syncInputValue(dom.cadFile, state.dxf.fileName || '');
+
+  const sendBtn = document.getElementById('send-cad-x-button');
+  if (sendBtn) sendBtn.disabled = !(state.control && state.control.connection && state.control.connection.connected);
+
   renderPointsTable();
   renderProcessTable();
   renderCadPreview();
@@ -334,19 +402,179 @@ function renderDxf() {
 
 function renderPointsTable() {
   const points = state.dxf.points || [];
-  dom.pointsBody.innerHTML = points.map((point) => {
-    const selected = point.key === state.dxf.selectedPointKey ? "is-selected" : "";
-    return `
-      <tr class="${selected}" data-point-key="${escapeHtml(point.key || "")}">
-        <td>${escapeHtml(point.index != null ? String(point.index) : "")}</td>
-        <td>${escapeHtml(point.lineType || "")}</td>
-        <td>${escapeHtml(point.xDisplay || "")}</td>
-        <td>${escapeHtml(point.yDisplay || "")}</td>
-      </tr>
-    `;
-  }).join("");
+  const primitives = state.dxf.primitives || [];
+  const rows = [];
+  const processed = new Array(points.length).fill(false);
 
-  dom.pointsEmpty.classList.toggle("hidden", points.length > 0);
+  const toLower = (s) => (s || '').toLowerCase();
+
+  const isCenterType = (lt) => /circle|tâm|tam|center/.test(lt);
+  const isArcType = (lt) => /arc|cung/.test(lt);
+  const isLineType = (lt) => /line|polyline|polyline2d|polyline2d/.test(lt);
+  const isIntersectionType = (lt) => /giao|intersection|vertex|giao điểm/.test(lt) && !isArcType(lt) && !isCenterType(lt);
+
+  function findNearby(index, predicate, maxDistance = 8) {
+    const n = points.length;
+    for (let d = 0; d <= maxDistance; d++) {
+      const j1 = index + d;
+      if (j1 < n && !processed[j1] && predicate(toLower(points[j1].lineType))) return j1;
+      if (d > 0) {
+        const j2 = index - d;
+        if (j2 >= 0 && !processed[j2] && predicate(toLower(points[j2].lineType))) return j2;
+      }
+    }
+    return -1;
+  }
+
+  function distance(a, b) {
+    return Math.sqrt(Math.pow((a.x || 0) - (b.x || 0), 2) + Math.pow((a.y || 0) - (b.y || 0), 2));
+  }
+
+  function findCircumferencePoint(center) {
+    // try points first
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      if (!pt) continue;
+      if (toLower(pt.lineType).includes('circle') || toLower(pt.lineType).includes('tâm') || toLower(pt.lineType).includes('tam')) continue;
+      const d = distance(center, pt);
+      if (d > 1e-3) return pt;
+    }
+    // fallback to primitives points
+    for (let i = 0; i < primitives.length; i++) {
+      const prim = primitives[i];
+      if (!prim || !prim.points) continue;
+      for (let j = 0; j < prim.points.length; j++) {
+        const pt = prim.points[j];
+        if (!pt) continue;
+        const d = Math.sqrt(Math.pow((pt.x || 0) - (center.x || 0), 2) + Math.pow((pt.y || 0) - (center.y || 0), 2));
+        if (d > 1e-3) return { x: pt.x, y: pt.y, xDisplay: (pt.x != null ? pt.x : ''), yDisplay: (pt.y != null ? pt.y : ''), key: '', index: '' };
+      }
+    }
+    // as last resort return center itself
+    return center;
+  }
+
+  for (let i = 0; i < points.length; i++) {
+    if (processed[i]) continue;
+    const p = points[i];
+    const lt = toLower(p.lineType);
+
+    // Always list intersection/polyline points individually, labeling lines as 'Line'
+    if (isIntersectionType(lt) || isLineType(lt)) {
+      const displayType = isLineType(lt) ? 'Line' : (p.lineType || 'Point');
+      rows.push(`
+        <tr data-point-key="${escapeHtml(p.key || '')}">
+          <td>${escapeHtml(p.index != null ? String(p.index) : '')}</td>
+          <td>${escapeHtml(displayType)}</td>
+          <td>${escapeHtml(p.xDisplay || String(p.x || ''))}</td>
+          <td>${escapeHtml(p.yDisplay || String(p.y || ''))}</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+        </tr>
+      `);
+      processed[i] = true;
+      continue;
+    }
+
+    // Arc/circle grouping
+    if (isArcType(lt) || isCenterType(lt)) {
+      let startIdx = -1, endIdx = -1, centerIdx = -1;
+
+      if (isArcType(lt) && !isCenterType(lt)) startIdx = i;
+      if (isCenterType(lt)) centerIdx = i;
+
+      if (startIdx === -1) startIdx = findNearby(i, (s) => isArcType(s) && !isCenterType(s));
+      if (endIdx === -1) endIdx = findNearby(i + 1, (s) => isArcType(s) && !isCenterType(s));
+      if (centerIdx === -1) centerIdx = findNearby(i, (s) => isCenterType(s));
+
+      // widen search
+      if (startIdx === -1) startIdx = findNearby(i, (s) => isArcType(s), points.length);
+      if (endIdx === -1) {
+        for (let j = 0; j < points.length; j++) {
+          if (processed[j]) continue;
+          if (j === startIdx) continue;
+          const qlt = toLower(points[j].lineType);
+          if (isArcType(qlt) && !isCenterType(qlt)) { endIdx = j; break; }
+        }
+      }
+
+      const start = startIdx >= 0 ? points[startIdx] : null;
+      const end = endIdx >= 0 ? points[endIdx] : null;
+      const center = centerIdx >= 0 ? points[centerIdx] : null;
+
+      const almostEqual = (a, b, eps = 1e-3) => Math.abs((a || 0) - (b || 0)) <= eps;
+      const isFullCircle = start && end && almostEqual(start.x, end.x) && almostEqual(start.y, end.y);
+
+      if (isFullCircle || (!start && !end && center)) {
+        // choose a circumference point to act as start/end
+        const repCenter = center || start || p;
+        const circPt = findCircumferencePoint(repCenter);
+        const sx = circPt.xDisplay || (circPt.x != null ? String(circPt.x) : '');
+        const sy = circPt.yDisplay || (circPt.y != null ? String(circPt.y) : '');
+
+        rows.push(`
+          <tr data-point-key="${escapeHtml((circPt.key || repCenter.key) || '')}">
+            <td>${escapeHtml(repCenter.index != null ? String(repCenter.index) : '')}</td>
+            <td>Hình tròn</td>
+            <td>${escapeHtml(sx)}</td>
+            <td>${escapeHtml(sy)}</td>
+            <td>${escapeHtml(sx)}</td>
+            <td>${escapeHtml(sy)}</td>
+            <td>${escapeHtml(repCenter.xDisplay || String(repCenter.x || ''))}</td>
+            <td>${escapeHtml(repCenter.yDisplay || String(repCenter.y || ''))}</td>
+          </tr>
+        `);
+
+        if (startIdx >= 0) processed[startIdx] = true;
+        if (endIdx >= 0) processed[endIdx] = true;
+        if (centerIdx >= 0) processed[centerIdx] = true;
+        continue;
+      }
+
+      // normal arc with distinct start/end
+      const s = start || end || p;
+      const e = end || start || (start ? start : null);
+
+      rows.push(`
+        <tr data-point-key="${escapeHtml(s.key || '')}">
+          <td>${escapeHtml(s.index != null ? String(s.index) : '')}</td>
+          <td>Cung tròn</td>
+          <td>${escapeHtml(s.xDisplay || String(s.x || ''))}</td>
+          <td>${escapeHtml(s.yDisplay || String(s.y || ''))}</td>
+          <td>${escapeHtml(e && e.xDisplay ? e.xDisplay : '')}</td>
+          <td>${escapeHtml(e && e.yDisplay ? e.yDisplay : '')}</td>
+          <td>${escapeHtml(center && center.xDisplay ? center.xDisplay : '')}</td>
+          <td>${escapeHtml(center && center.yDisplay ? center.yDisplay : '')}</td>
+        </tr>
+      `);
+
+      if (startIdx >= 0) processed[startIdx] = true;
+      if (endIdx >= 0) processed[endIdx] = true;
+      if (centerIdx >= 0) processed[centerIdx] = true;
+
+      continue;
+    }
+
+    // fallback
+    rows.push(`
+      <tr data-point-key="${escapeHtml(p.key || '')}">
+        <td>${escapeHtml(p.index != null ? String(p.index) : '')}</td>
+        <td>${escapeHtml(p.lineType || '')}</td>
+        <td>${escapeHtml(p.xDisplay || String(p.x || ''))}</td>
+        <td>${escapeHtml(p.yDisplay || String(p.y || ''))}</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+      </tr>
+    `);
+    processed[i] = true;
+  }
+
+  dom.pointsBody.innerHTML = rows.join('');
+  dom.pointsEmpty.classList.toggle('hidden', rows.length > 0);
 }
 
 function renderProcessTable() {
@@ -434,6 +662,70 @@ function renderCadPreview() {
   `;
 }
 
+function renderTelemetry() {
+  const t = state.telemetry || {};
+  const connected = t.connected;
+  const dValues = t.dValues || [];
+  const buffers = t.buffers || [];
+
+  // ensure controls reflect connection state
+  if (dom.writeBufferButton) dom.writeBufferButton.disabled = !connected;
+  if (dom.writeBufferPath) dom.writeBufferPath.disabled = !connected;
+  if (dom.writeBufferValue) dom.writeBufferValue.disabled = !connected;
+
+  // enable/disable send cad button
+  const sendCadBtn = document.getElementById('send-cad-x-button');
+  if (sendCadBtn) sendCadBtn.disabled = !connected;
+
+  if (!dom.telemetryContent) return;
+
+  if (!connected) {
+    dom.telemetryContent.innerHTML = '<div class="telemetry-empty">Không có dữ liệu telemetry. Kết nối PLC để kích hoạt.</div>';
+    return;
+  }
+
+  const rows = [];
+
+  rows.push(`<div class="telemetry-header">Telemetry (connected)</div>`);
+
+  if (dValues.length) {
+    rows.push('<div class="telemetry-section"><div class="telemetry-title">D registers</div><table class="telemetry-table"><thead><tr><th>Register</th><th>Value</th><th>Status</th></tr></thead><tbody>');
+    dValues.forEach((item) => {
+      rows.push(`<tr><td>${escapeHtml(item.register || '')}</td><td>${escapeHtml(item.value != null ? String(item.value) : '')}</td><td>${escapeHtml(item.ok ? 'OK' : (item.error || 'ERR'))}</td></tr>`);
+    });
+    rows.push('</tbody></table></div>');
+  }
+
+  if (buffers.length) {
+    rows.push('<div class="telemetry-section"><div class="telemetry-title">Buffers (Un\\Gx)</div>');
+    buffers.forEach((b) => {
+      const vals = (b.values || []).map(v => escapeHtml(String(v))).join(', ');
+      rows.push(`<div class="telemetry-buffer"><div class="buffer-path">${escapeHtml(b.path || '')}</div><div class="buffer-values">[${vals}]</div><div class="buffer-status">${b.ok ? 'OK' : (b.error || 'ERR')}</div></div>`);
+    });
+    rows.push('</div>');
+  }
+
+  dom.telemetryContent.innerHTML = rows.join('');
+}
+
+function renderLogs() {
+  const rows = state.logs || [];
+  if (!dom.logsBody) return;
+
+  dom.logsBody.innerHTML = rows.map((r) => `
+    <tr>
+      <td>${escapeHtml(r.timestamp || '')}</td>
+      <td>${escapeHtml(r.direction || '')}</td>
+      <td>${escapeHtml(r.address || '')}</td>
+      <td>${escapeHtml(r.value != null ? String(r.value) : '')}</td>
+      <td>${escapeHtml(r.status || '')}</td>
+      <td>${escapeHtml(r.message || '')}</td>
+    </tr>
+  `).join('');
+
+  dom.logsEmpty.classList.toggle('hidden', rows.length > 0);
+}
+
 function applyTheme(theme) {
   dom.html.classList.toggle("theme-dark", theme === "dark");
   dom.html.classList.toggle("theme-light", theme !== "dark");
@@ -441,9 +733,13 @@ function applyTheme(theme) {
 }
 
 function applyView(view) {
-  const isControl = view !== "dxf";
-  dom.viewControl.classList.toggle("is-active", isControl);
-  dom.viewDxf.classList.toggle("is-active", !isControl);
+  state.view = view;
+  // toggle known views explicitly
+  dom.viewControl && dom.viewControl.classList.toggle("is-active", view === "control");
+  dom.viewLogs && dom.viewLogs.classList.toggle("is-active", view === "logs");
+  dom.viewTelemetry && dom.viewTelemetry.classList.toggle("is-active", view === "telemetry");
+  dom.viewDxf && dom.viewDxf.classList.toggle("is-active", view === "dxf");
+
   updateNavState();
 }
 
