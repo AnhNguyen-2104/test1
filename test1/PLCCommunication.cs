@@ -248,7 +248,14 @@ namespace test1
             {
                 short sStart = Convert.ToInt16(startIO);
                 int writeSize = data.Length; // number of 16-bit words
-                object bufObj = data;
+                
+                // Convert short[] to object[] for COM compatibility
+                object[] bufObj = new object[data.Length];
+                for (int i = 0; i < data.Length; i++)
+                {
+                    bufObj[i] = (int)data[i]; // Convert short to int for COM
+                }
+                
                 int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
                 return result;
             }
