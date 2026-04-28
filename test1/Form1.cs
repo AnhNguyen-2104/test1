@@ -24,30 +24,12 @@ namespace test1
         {
             try
             {
-                string ip = txtIPAddress.Text.Trim();
-                int port = int.TryParse(txtPort.Text.Trim(), out int p) ? p : 2000;
-
-                plcComm = new PLCCommunication(ip, port);
+                plcComm = new PLCCommunication(txtIPAddress.Text.Trim());
                 if (plcComm.Connect())
                 {
                     UpdateConnectionState(true);
-                    MessageBox.Show("Kết nối thành công!");
+                    MessageBox.Show("Kết nối hệ thống bôi keo thành công!");
                 }
-                else MessageBox.Show("Kết nối thất bại.");
-            }
-            catch (Exception ex) { MessageBox.Show(ex.Message); }
-        }
-
-        private void btnWriteSetDevice32_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                string path = txtDeviceName.Text.Trim();
-                int val = int.Parse(txtValue.Text.Trim());
-                int res = plcComm.WriteInt32ToDevicePath(path, val, out string method);
-
-                if (res == 0) MessageBox.Show($"Ghi thành công qua {method}");
-                else MessageBox.Show($"Lỗi: {plcComm.GetErrorMessage(res)}");
             }
             catch (Exception ex) { MessageBox.Show(ex.Message); }
         }
@@ -57,14 +39,16 @@ namespace test1
             try
             {
                 int startIO = int.Parse(txtStartIO.Text.Trim());
-                int gAddr = int.Parse(txtBufferAddress.Text.Trim());
+                int gAddr = int.Parse(txtBufferAddress.Text.Trim()); // Ví dụ: 2006
                 int val = int.Parse(txtValue.Text.Trim());
 
-                int res = plcComm.WriteInt32ToBufferAuto(startIO, gAddr, val, out string order);
-                if (res == 0) MessageBox.Show($"Ghi Buffer thành công ({order})");
+                // Sử dụng hàm ghi 32-bit đã xử lý Low/High
+                int res = plcComm.WriteInt32ToBuffer(startIO, gAddr, val);
+
+                if (res == 0) MessageBox.Show($"Ghi thành công: G{gAddr}(L) và G{gAddr + 1}(H)");
                 else MessageBox.Show($"Lỗi: {plcComm.GetErrorMessage(res)}");
             }
-            catch (Exception ex) { MessageBox.Show(ex.Message); }
+            catch (Exception ex) { MessageBox.Show("Kiểm tra lại dữ liệu nhập: " + ex.Message); }
         }
 
         private void btnRead_Click(object sender, EventArgs e)

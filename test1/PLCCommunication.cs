@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Reflection;
@@ -79,26 +78,23 @@ namespace test1
             throw new Exception($"Lỗi ReadDevice: {result}");
         }
 
-        public bool WriteDevice(string deviceName, object value)
-        {
-            if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
-            int result = plcDevice.WriteDevice(deviceName, value);
-            return result == 0;
-        }
-
+        /// <summary>
+        /// Ghi dữ liệu vào Buffer Memory module thông minh.
+        /// Xử lý triệt để lỗi "Could not convert argument 0".
+        /// </summary>
         public int WriteBuffer(int startIO, int address, short[] data)
         {
             if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
             Type comType = plcDevice.GetType();
             try
             {
-                object s = (short)startIO; // Ép kiểu short để tránh lỗi Argument 0
+                object s = (short)startIO; // Ép kiểu short bắt buộc cho Argument 0
                 object addr = (int)address;
                 object size = (int)data.Length;
                 object buf = data;
 
                 ParameterModifier pm = new ParameterModifier(4);
-                pm[3] = true; // Truyền buffer bằng tham chiếu (ref)
+                pm[3] = true; // Truyền SAFEARRAY bằng ref
 
                 object ret = comType.InvokeMember("WriteBuffer", BindingFlags.InvokeMethod, null,
                     plcDevice, new object[] { s, addr, size, buf }, new ParameterModifier[] { pm }, null, null);
@@ -108,6 +104,20 @@ namespace test1
             {
                 throw new Exception($"Lỗi WriteBuffer: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Ghi số 32-bit theo thứ tự Low Word -> High Word.
+        /// Ví dụ: G2006 (L) và G2007 (H).
+        /// </summary>
+        public int WriteInt32ToBuffer(int startIO, int address, int value)
+        {
+            short[] sData = new short[2];
+            // Tách giá trị 32-bit thành 2 thanh ghi 16-bit
+            sData[0] = (short)(value & 0xFFFF);         // Gửi vào G2006 (Low)
+            sData[1] = (short)((value >> 16) & 0xFFFF); // Gửi vào G2007 (High)
+
+            return WriteBuffer(startIO, address, sData);
         }
 
         public int WriteInt32ToDevicePath(string devicePath, int value, out string usedMethod)
@@ -123,24 +133,12 @@ namespace test1
                     return 0;
                 }
 
-                // Nếu SetDevice không hỗ trợ 32-bit, ghi thủ công qua WriteBuffer
-                short[] sData = new short[2];
-                sData[0] = (short)(value & 0xFFFF);
-                sData[1] = (short)((value >> 16) & 0xFFFF);
-                usedMethod = "WriteBuffer";
-                return WriteBuffer(uNum / 16, gAddr, sData); // startIO = U/16
+                // Nếu SetDevice lỗi, dùng cơ chế tách Word thủ công
+                usedMethod = "WriteBuffer (Tách Word)";
+                return WriteInt32ToBuffer(uNum / 16, gAddr, value);
             }
             usedMethod = "SetDevice";
             return plcDevice.SetDevice(devicePath, value);
-        }
-
-        public int WriteInt32ToBufferAuto(int startIO, int address, int value, out string usedOrder)
-        {
-            usedOrder = "LowFirst";
-            short[] sData = new short[2];
-            sData[0] = (short)(value & 0xFFFF);
-            sData[1] = (short)((value >> 16) & 0xFFFF);
-            return WriteBuffer(startIO, address, sData);
         }
 
         private static bool TryParseUDevicePath(string devicePath, out int uNumber, out int gAddress)
@@ -155,7 +153,7 @@ namespace test1
         public string GetErrorMessage(int errorCode)
         {
             try { return plcDevice.GetErrorMessage(errorCode); }
-            catch { return $"Error: {errorCode}"; }
+            catch { return $"Mã lỗi: {errorCode}"; }
         }
 
         public void Dispose()
