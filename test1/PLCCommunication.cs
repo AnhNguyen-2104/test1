@@ -270,14 +270,13 @@ namespace test1
             try
             {
                 short[] data = new short[size];
-                object obj = data; // prepare for ref
-                int result = plcDevice.ReadBuffer(startIO, address, size, ref obj);
+                // Pass the short[] by ref directly to the COM call
+                int result = plcDevice.ReadBuffer(startIO, address, size, ref data);
                 resultCode = result;
 
                 if (result == 0)
                 {
-                    // obj should be a short[] filled by COM
-                    return (short[])obj;
+                    return data;
                 }
                 else
                 {
@@ -320,7 +319,7 @@ namespace test1
         }
 
         /// <summary>
-        /// Convenience method: write 32-bit value to device path like "U0\G2006"
+        /// Convenience method: write 32-bit value to device path like "U0\\G2006"
         /// Returns ActUtlType result code (0 = success).
         /// Overload added to auto-detect and fallback if SetDevice doesn't write full 32-bit.
         /// </summary>
@@ -332,7 +331,7 @@ namespace test1
 
         /// <summary>
         /// Write 32-bit to device path with verification and fallback.
-        /// If devicePath matches Ux\Gyyyy, tries SetDevice then verifies by ReadBuffer; if verification fails falls back to WriteBufferAuto.
+        /// If devicePath matches Ux\\Gyyyy, tries SetDevice then verifies by ReadBuffer; if verification fails falls back to WriteBufferAuto.
         /// 'usedMethod' returns which approach succeeded: "SetDevice", "WriteBuffer:LowFirst", "WriteBuffer:HighFirst" or empty on failure.
         /// </summary>
         public int WriteInt32ToDevicePath(string devicePath, int value, out string usedMethod)
@@ -495,12 +494,7 @@ namespace test1
             s = s.Replace("\\\\", "\\"); // collapsed escapes
 
             // Pattern: U<number>\G<number>
-            var m = Regex.Match(s, "^U(\\d+)\\\\G(\\d+)$", RegexOptions.IgnoreCase);
-            if (!m.Success)
-            {
-                // try single backslash (textboxes will usually contain single backslash)
-                m = Regex.Match(s, "^U(\\d+)\\G(\\d+)$", RegexOptions.IgnoreCase);
-            }
+            var m = Regex.Match(s, @"^U(\d+)\\G(\d+)$", RegexOptions.IgnoreCase);
 
             if (!m.Success)
                 return false;
