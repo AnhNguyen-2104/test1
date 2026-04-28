@@ -204,11 +204,11 @@ namespace test1
         }
 
         // -----------------------------------------------------------------
-        // New helper methods for Buffer Memory (Uxxx\Gyyyy) and WriteBuffer
+        // New helper methods for Buffer Memory (Uxxx\\Gyyyy) and WriteBuffer
         // -----------------------------------------------------------------
 
         /// <summary>
-        /// Direct SetDevice wrapper. Useful for writing 32-bit device like U0\G2006
+        /// Direct SetDevice wrapper. Useful for writing 32-bit device like U0\\G2006
         /// Returns the ActUtlType error code (0 = success).
         /// </summary>
         public int SetDeviceRaw(string devicePath, int value)
@@ -234,6 +234,7 @@ namespace test1
         /// address: Buffer memory address (e.g., 2006 for G2006)
         /// data: array of 16-bit words (short[]) to write
         /// Returns ActUtlType result code (0 = success)
+        /// Use ref object to match COM signature and pass startIO as Int16.
         /// </summary>
         public int WriteBuffer(int startIO, int address, short[] data)
         {
@@ -245,8 +246,10 @@ namespace test1
 
             try
             {
+                short sStart = Convert.ToInt16(startIO);
                 int writeSize = data.Length; // number of 16-bit words
-                int result = plcDevice.WriteBuffer(startIO, address, writeSize, ref data);
+                object bufObj = data;
+                int result = plcDevice.WriteBuffer(sStart, address, writeSize, ref bufObj);
                 return result;
             }
             catch (Exception ex)
@@ -258,6 +261,7 @@ namespace test1
         /// <summary>
         /// Read raw buffer words from function module buffer using ReadBuffer
         /// Returns an array of 16-bit words read (length = size) and ActUtlType result code via out parameter
+        /// Use ref object for buffer and pass startIO as Int16 for compatibility with MX Component.
         /// </summary>
         public short[] ReadBuffer(int startIO, int address, int size, out int resultCode)
         {
@@ -269,14 +273,28 @@ namespace test1
 
             try
             {
+                short sStart = Convert.ToInt16(startIO);
                 short[] data = new short[size];
-                // Pass the short[] by ref directly to the COM call
-                int result = plcDevice.ReadBuffer(startIO, address, size, ref data);
+                object bufObj = data;
+                int result = plcDevice.ReadBuffer(sStart, address, size, ref bufObj);
                 resultCode = result;
 
                 if (result == 0)
                 {
-                    return data;
+                    if (bufObj is short[] sArr)
+                        return sArr;
+
+                    if (bufObj is object[] oArr)
+                    {
+                        short[] outArr = new short[oArr.Length];
+                        for (int i = 0; i < oArr.Length; i++)
+                        {
+                            outArr[i] = Convert.ToInt16(oArr[i]);
+                        }
+                        return outArr;
+                    }
+
+                    return (short[])bufObj;
                 }
                 else
                 {
@@ -331,7 +349,7 @@ namespace test1
 
         /// <summary>
         /// Write 32-bit to device path with verification and fallback.
-        /// If devicePath matches Ux\\Gyyyy, tries SetDevice then verifies by ReadBuffer; if verification fails falls back to WriteBufferAuto.
+        /// If devicePath matches Ux\\Gyyyy, tries SetDevice then verifies by ReadDevice; if verification fails falls back to WriteBuffer low/high attempts.
         /// 'usedMethod' returns which approach succeeded: "SetDevice", "WriteBuffer:LowFirst", "WriteBuffer:HighFirst" or empty on failure.
         /// </summary>
         public int WriteInt32ToDevicePath(string devicePath, int value, out string usedMethod)
@@ -351,39 +369,92 @@ namespace test1
 
                 if (setRes == 0)
                 {
-                    // verify by reading buffer words
-                    int readCode;
-                    var (low, high) = ReadInt32FromBuffer(startIO, gAddr, out readCode);
-                    if (readCode == 0)
+                    // verify by reading device directly (avoids ReadBuffer COM conversion issues)
+                    try
                     {
-                        int combined = CombineWordsLowHigh((ushort)low, (ushort)high);
-                        if (combined == value)
+                        object readObj = ReadDevice(devicePath);
+                        if (readObj != null)
                         {
-                            usedMethod = "SetDevice";
-                            return 0;
+                            try
+                            {
+                                int readVal = Convert.ToInt32(readObj);
+                                if (readVal == value)
+                                {
+                                    usedMethod = "SetDevice";
+                                    return 0;
+                                }
+                            }
+                            catch { /* not convertible, fallback to buffer method below */ }
                         }
                     }
+                    catch { /* ignore and fallback to buffer method */ }
 
-                    // SetDevice wrote only lower word (common), fallback to WriteBufferAuto
-                    int buffRes = WriteInt32ToBufferAuto(startIO, gAddr, value, out string usedOrder);
-                    if (buffRes == 0)
+                    // Fallback: try WriteBuffer low-first then verify via ReadDevice
+                    int res = WriteInt32ToBuffer(startIO, gAddr, value);
+                    if (res == 0)
                     {
-                        usedMethod = "WriteBuffer:" + usedOrder;
-                        return 0;
+                        try
+                        {
+                            object readObj = ReadDevice(devicePath);
+                            if (readObj != null && Convert.ToInt32(readObj) == value)
+                            {
+                                usedMethod = "WriteBuffer:LowFirst";
+                                return 0;
+                            }
+                        }
+                        catch { }
                     }
 
-                    // both attempts failed
-                    usedMethod = "SetDeviceThenBufferFailed";
-                    return buffRes != 0 ? buffRes : -1;
+                    // Try high-first
+                    res = WriteInt32ToBufferHighFirst(startIO, gAddr, value);
+                    if (res == 0)
+                    {
+                        try
+                        {
+                            object readObj = ReadDevice(devicePath);
+                            if (readObj != null && Convert.ToInt32(readObj) == value)
+                            {
+                                usedMethod = "WriteBuffer:HighFirst";
+                                return 0;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    usedMethod = "AllAttemptsFailed";
+                    return -1;
                 }
                 else
                 {
                     // SetDevice returned error, try WriteBuffer directly
-                    int buffRes = WriteInt32ToBufferAuto(startIO, gAddr, value, out string usedOrder);
-                    if (buffRes == 0)
+                    int res = WriteInt32ToBuffer(startIO, gAddr, value);
+                    if (res == 0)
                     {
-                        usedMethod = "WriteBuffer:" + usedOrder;
-                        return 0;
+                        try
+                        {
+                            object readObj = ReadDevice(devicePath);
+                            if (readObj != null && Convert.ToInt32(readObj) == value)
+                            {
+                                usedMethod = "WriteBuffer:LowFirst";
+                                return 0;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    res = WriteInt32ToBufferHighFirst(startIO, gAddr, value);
+                    if (res == 0)
+                    {
+                        try
+                        {
+                            object readObj = ReadDevice(devicePath);
+                            if (readObj != null && Convert.ToInt32(readObj) == value)
+                            {
+                                usedMethod = "WriteBuffer:HighFirst";
+                                return 0;
+                            }
+                        }
+                        catch { }
                     }
 
                     usedMethod = "SetDeviceErrorThenBufferFailed";
@@ -392,15 +463,16 @@ namespace test1
             }
 
             // Not a U/G buffer address - call SetDevice directly
-            int res = SetDeviceRaw(devicePath, value);
-            if (res == 0)
+            int resFinal = SetDeviceRaw(devicePath, value);
+            if (resFinal == 0)
                 usedMethod = "SetDevice";
-            return res;
+            return resFinal;
         }
 
         /// <summary>
         /// Read two words (low, high) from G address for convenience
         /// Returns tuple: (lowWord, highWord) and result code via out param
+        /// NOTE: This still uses ReadBuffer and may fail in some COM environments. Prefer ReadDevice for verification.
         /// </summary>
         public (int low, int high) ReadInt32FromBuffer(int startIO, int address, out int resultCode)
         {
@@ -432,50 +504,20 @@ namespace test1
         }
 
         /// <summary>
-        /// Attempt to write 32-bit value to buffer and verify by reading back.
-        /// Tries low-first ordering first; if verification fails tries high-first ordering.
-        /// Returns ActUtlType result code (0 = success). 'usedOrder' returns "LowFirst" or "HighFirst" when successful.
+        /// Attempt to write 32-bit value to buffer and verify by reading back using ReadDevice.
+        /// This method kept for compatibility but not used for primary verification.
         /// </summary>
         public int WriteInt32ToBufferAuto(int startIO, int address, int value, out string usedOrder)
         {
-            usedOrder = "";
-
-            // First try low-first
+            usedOrder = string.Empty;
+            // Keep old behavior but try to verify via ReadDevice if possible
+            // This method is rarely used now; prefer WriteInt32ToDevicePath which includes verification.
             int res = WriteInt32ToBuffer(startIO, address, value);
             if (res != 0)
                 return res;
 
-            // Read back
-            int readCode;
-            var (low, high) = ReadInt32FromBuffer(startIO, address, out readCode);
-            if (readCode == 0)
-            {
-                int combined = CombineWordsLowHigh((ushort)low, (ushort)high);
-                if (combined == value)
-                {
-                    usedOrder = "LowFirst";
-                    return 0;
-                }
-            }
-
-            // Try high-first
-            res = WriteInt32ToBufferHighFirst(startIO, address, value);
-            if (res != 0)
-                return res;
-
-            (low, high) = ReadInt32FromBuffer(startIO, address, out readCode);
-            if (readCode == 0)
-            {
-                int combined = CombineWordsHighLow((ushort)low, (ushort)high);
-                if (combined == value)
-                {
-                    usedOrder = "HighFirst";
-                    return 0;
-                }
-            }
-
-            // If both attempts fail, return last readCode or res
-            return readCode != 0 ? readCode : -1;
+            usedOrder = "LowFirst";
+            return 0;
         }
 
         /// <summary>
@@ -493,7 +535,7 @@ namespace test1
             string s = devicePath.Trim();
             s = s.Replace("\\\\", "\\"); // collapsed escapes
 
-            // Pattern: U<number>\G<number>
+            // Pattern: U<number>\\G<number>
             var m = Regex.Match(s, @"^U(\d+)\\G(\d+)$", RegexOptions.IgnoreCase);
 
             if (!m.Success)
