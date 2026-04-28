@@ -125,16 +125,8 @@ namespace test1
             usedMethod = "Unknown";
             if (TryParseUDevicePath(devicePath, out int uNum, out int gAddr))
             {
-                // Thử ghi trực tiếp bằng SetDevice
-                int res = plcDevice.SetDevice(devicePath, value);
-                if (res == 0)
-                {
-                    usedMethod = "SetDevice";
-                    return 0;
-                }
-
-                // Nếu SetDevice lỗi, dùng cơ chế tách Word thủ công
-                usedMethod = "WriteBuffer (Tách Word)";
+                // Buffer memory Ux\Gy 32-bit must be written as Low word first, then High word.
+                usedMethod = "WriteBuffer (Low word -> High word)";
                 return WriteInt32ToBuffer(uNum / 16, gAddr, value);
             }
             usedMethod = "SetDevice";
