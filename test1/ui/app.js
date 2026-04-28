@@ -27,6 +27,14 @@ const state = {
 const dom = {};
 let modalSubmit = null;
 
+// CAD Pan/Zoom state
+let cadPanX = 0;
+let cadPanY = 0;
+let cadZoom = 1;
+let isCadPanning = false;
+let startCadPanX = 0;
+let startCadPanY = 0;
+
 window.app = {
   receive(message) {
     handleHostMessage(message || {});
@@ -73,7 +81,6 @@ function cacheDom() {
   dom.cadPreview = document.getElementById("cad-preview");
   dom.cadPlaceholder = document.getElementById("cad-placeholder");
   dom.pointsBody = document.getElementById("points-table-body");
-  dom.pointsEmpty = document.getElementById("points-empty");
   dom.processBody = document.getElementById("process-table-body");
   dom.assignButtons = Array.from(document.querySelectorAll("[data-assign-slot]"));
   dom.processButtons = Array.from(document.querySelectorAll("[data-process-key]"));
@@ -226,7 +233,18 @@ function bindEvents() {
     post("selectCadPoint", { key: state.dxf.selectedPointKey });
   });
 
+  dom.processBody.addEventListener("change", (event) => {
+    const input = event.target;
+    if (input.tagName === "INPUT" && input.dataset.processIndex !== undefined) {
+      const index = parseInt(input.dataset.processIndex, 10);
+      const field = input.dataset.processField;
+      const value = input.value.trim();
+      post("setProcessRowValue", { index, field, value });
+    }
+  });
+
   dom.cadPreview.addEventListener("click", (event) => {
+    // Only select point if we didn't just pan
     const target = event.target.closest("[data-point-key]");
     if (!target) {
       return;
@@ -237,6 +255,63 @@ function bindEvents() {
     renderCadPreview();
     post("selectCadPoint", { key: state.dxf.selectedPointKey });
   });
+
+  // Pan and Zoom logic
+  dom.cadPreview.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const zoomSensitivity = 0.1;
+    const delta = event.deltaY > 0 ? -zoomSensitivity : zoomSensitivity;
+    
+    // Calculate mouse position relative to SVG
+    const rect = dom.cadPreview.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+
+    const oldZoom = cadZoom;
+    cadZoom = Math.max(0.1, Math.min(10, cadZoom + delta));
+
+    // Adjust pan so it zooms towards the mouse cursor
+    const scaleChange = cadZoom / oldZoom;
+    cadPanX = mouseX - (mouseX - cadPanX) * scaleChange;
+    cadPanY = mouseY - (mouseY - cadPanY) * scaleChange;
+    
+    updateCadTransform();
+  });
+
+  dom.cadPreview.addEventListener("mousedown", (event) => {
+    // Middle click or Left click on background to pan
+    if (event.button === 1 || (event.button === 0 && !event.target.closest("[data-point-key]"))) {
+      event.preventDefault();
+      isCadPanning = true;
+      startCadPanX = event.clientX - cadPanX;
+      startCadPanY = event.clientY - cadPanY;
+      dom.cadPreview.style.cursor = "grabbing";
+    }
+  });
+
+  dom.cadPreview.addEventListener("mousemove", (event) => {
+    if (!isCadPanning) return;
+    cadPanX = event.clientX - startCadPanX;
+    cadPanY = event.clientY - startCadPanY;
+    updateCadTransform();
+  });
+
+  dom.cadPreview.addEventListener("mouseup", () => {
+    isCadPanning = false;
+    dom.cadPreview.style.cursor = "grab";
+  });
+
+  dom.cadPreview.addEventListener("mouseleave", () => {
+    isCadPanning = false;
+    dom.cadPreview.style.cursor = "grab";
+  });
+
+  function updateCadTransform() {
+    const group = document.getElementById("cad-transform-group");
+    if (group) {
+      group.setAttribute("transform", `translate(${cadPanX}, ${cadPanY}) scale(${cadZoom})`);
+    }
+  }
 
   // telemetry write buffer button
   if (dom.writeBufferButton) {
@@ -489,17 +564,18 @@ function renderPointsTable() {
   }
 
   dom.pointsBody.innerHTML = rows.join('');
-  dom.pointsEmpty.classList.toggle('hidden', rows.length === 0);
 }
+
+
 
 function renderProcessTable() {
   const rows = state.dxf.processRows || [];
-  dom.processBody.innerHTML = rows.map((row) => `
+  dom.processBody.innerHTML = rows.map((row, index) => `
     <tr>
       <td>${escapeHtml(row.motionType || "")}</td>
-      <td>${escapeHtml(row.mCodeValue || "")}</td>
-      <td>${escapeHtml(row.dwell || "")}</td>
-      <td>${escapeHtml(row.speed || "")}</td>
+      <td><input type="text" class="text-input compact" style="margin:0; width:100%; min-width:80px;" data-process-index="${index}" data-process-field="mcode" value="${escapeHtml(row.mCodeValue || "")}"></td>
+      <td><input type="text" class="text-input compact" style="margin:0; width:100%; min-width:60px;" data-process-index="${index}" data-process-field="dwell" value="${escapeHtml(row.dwell || "")}"></td>
+      <td><input type="text" class="text-input compact" style="margin:0; width:100%; min-width:60px;" data-process-index="${index}" data-process-field="speed" value="${escapeHtml(row.speed || "")}"></td>
       <td>${escapeHtml(row.endCoordinate || "")}</td>
       <td>${escapeHtml(row.centerCoordinate || "")}</td>
     </tr>
@@ -571,9 +647,11 @@ function renderCadPreview() {
   }).join("");
 
   dom.cadPreview.innerHTML = `
-    <g>${polylineMarkup}</g>
-    <g>${pointMarkup}</g>
-    <g>${assignmentMarkup}</g>
+    <g id="cad-transform-group" transform="translate(${cadPanX}, ${cadPanY}) scale(${cadZoom})">
+      <g>${polylineMarkup}</g>
+      <g>${pointMarkup}</g>
+      <g>${assignmentMarkup}</g>
+    </g>
   `;
 }
 
@@ -744,4 +822,56 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Development Mode Mock Data
+// Tự động nạp dữ liệu mẫu nếu mở index.html trực tiếp trên trình duyệt (không thông qua C#)
+if (!host) {
+  setTimeout(() => {
+    handleHostMessage({
+      type: "state",
+      state: {
+        view: "dxf",
+        dxf: {
+          filePath: "C:\\MOCK\\DEMO_CAD.dxf",
+          fileName: "DEMO_CAD.dxf",
+          bounds: { left: 0, top: 0, width: 300, height: 250 },
+          primitives: [
+            {
+              sourceType: "Line",
+              points: [
+                { x: 50, y: 50 },
+                { x: 250, y: 50 },
+                { x: 250, y: 150 },
+                { x: 50, y: 150 },
+                { x: 50, y: 50 }
+              ]
+            },
+            {
+              sourceType: "Circle",
+              center: { x: 150, y: 100 },
+              radius: 40,
+              points: Array.from({ length: 37 }, (_, i) => ({
+                x: 150 + 40 * Math.cos(i * 10 * Math.PI / 180),
+                y: 100 + 40 * Math.sin(i * 10 * Math.PI / 180)
+              }))
+            }
+          ],
+          points: [
+            { x: 50, y: 50, key: "50_50", index: 1 },
+            { x: 250, y: 50, key: "250_50", index: 2 },
+            { x: 250, y: 150, key: "250_150", index: 3 },
+            { x: 50, y: 150, key: "50_150", index: 4 }
+          ],
+          processRows: [
+            { motionType: "Line (Continuous Path)", mCodeValue: "1", dwell: "100", speed: "15", endCoordinate: "250;50", centerCoordinate: "" },
+            { motionType: "Line (Continuous Path)", mCodeValue: "", dwell: "", speed: "15", endCoordinate: "250;150", centerCoordinate: "" },
+            { motionType: "Line (Continuous Path)", mCodeValue: "", dwell: "", speed: "15", endCoordinate: "50;150", centerCoordinate: "" },
+            { motionType: "Line (Continuous Positioning)", mCodeValue: "2", dwell: "0", speed: "15", endCoordinate: "50;50", centerCoordinate: "" },
+            { motionType: "Arc CCW (End)", mCodeValue: "", dwell: "500", speed: "10", endCoordinate: "190;100", centerCoordinate: "150;100" }
+          ]
+        }
+      }
+    });
+  }, 300);
 }

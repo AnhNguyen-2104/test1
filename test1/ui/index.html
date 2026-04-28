@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en" class="theme-dark">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gantry SCADA Robot Control</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <div class="app-shell">
     <header class="topbar">
@@ -169,7 +171,8 @@
                 </thead>
                 <tbody id="monitor-table-body"></tbody>
               </table>
-              <div id="monitor-empty" class="empty-state">No registers being monitored. Use ADD REGISTER to start live data flow.</div>
+              <div id="monitor-empty" class="empty-state">No registers being monitored. Use ADD REGISTER to start live
+                data flow.</div>
             </div>
           </div>
         </div>
@@ -221,8 +224,10 @@
           </div>
 
           <div class="telemetry-actions" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
-            <input id="write-buffer-path" class="text-input compact" type="text" value="U0\\G2006" style="width:240px;" />
-            <input id="write-buffer-value" class="text-input compact" type="number" value="12345" style="width:140px;" />
+            <input id="write-buffer-path" class="text-input compact" type="text" value="U0\\G2006"
+              style="width:240px;" />
+            <input id="write-buffer-value" class="text-input compact" type="number" value="12345"
+              style="width:140px;" />
             <button id="write-buffer-button" class="primary-button compact">Write U0\\G2006</button>
           </div>
         </div>
@@ -245,8 +250,34 @@
               <svg id="cad-preview" viewBox="0 0 1000 560" preserveAspectRatio="xMidYMid meet"></svg>
               <div id="cad-placeholder" class="preview-placeholder">View CAD</div>
             </div>
-          </div>
 
+            <div class="dxf-actions">
+              <div class="action-row">
+                <div class="action-group">
+                  <button class="primary-button" data-assign-slot="start">Điểm bắt đầu</button>
+                  <button class="primary-button" data-assign-slot="glueStart">Bắt đầu bơm keo</button>
+                  <button class="primary-button" data-assign-slot="glueEnd">Kết thúc bơm keo</button>
+                </div>
+                <div class="action-group">
+                  <button class="primary-button" data-process-key="zDown">Z hạ</button>
+                  <button class="primary-button" data-process-key="zSafe">Z an toàn</button>
+                  <button class="primary-button" data-process-key="speed">Tốc độ</button>
+                </div>
+              </div>
+              <div class="action-row space-between">
+                <div class="action-group">
+                  <button id="import-cad-to-process-button" class="primary-button">Import CAD → Process</button>
+                  <button id="send-cad-x-button" class="primary-button">Send CAD X</button>
+                </div>
+                <div class="action-group right">
+                  <button class="primary-button secondary-tone" data-run-action="resume">Resume</button>
+                  <button class="primary-button secondary-tone" data-run-action="pause">Pause</button>
+                  <button class="primary-button" data-run-action="start">Start</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
           <div class="panel panel-points">
             <div class="table-frame tall">
               <table class="data-table compact points-table">
@@ -264,9 +295,7 @@
                 </thead>
                 <tbody id="points-table-body"></tbody>
               </table>
-              <div id="points-empty" class="empty-state">Chưa có dữ liệu DXF.</div>
             </div>
-            <div class="panel-caption">Bảng tọa độ các điểm của cad</div>
           </div>
 
           <div class="panel panel-process">
@@ -287,34 +316,13 @@
             </div>
 
             <!-- Instruction / Notes area added -->
-            <div class="dxf-notes">
-              <div class="note-left">
-                <strong>Giá trị M code</strong>
-                <p>M code = 1 là bật bơm keo<br>M code = 2 là dừng bơm keo</p>
-              </div>
-              <div class="note-right">
-                <p>Đảm bảo 2 bảng này nhìn được hết dữ liệu (kéo thanh cuộn nếu cần).</p>
-              </div>
+            <div class="dxf-notes"
+              style="margin-top: 12px; font-size: 12px; color: var(--muted); display: flex; gap: 20px;">
+              <strong>Giá trị M code:</strong>
+              <span>M code = 1 (Bật bơm keo)</span>
+              <span>M code = 2 (Dừng bơm keo)</span>
             </div>
 
-          </div>
-        </div>
-
-        <div class="dxf-actions">
-          <div class="action-group">
-            <button class="primary-button" data-assign-slot="start">Điểm bắt đầu</button>
-            <button class="primary-button" data-assign-slot="glueStart">Điểm bắt đầu bơm keo</button>
-            <button class="primary-button" data-assign-slot="glueEnd">Điểm kết thúc bơm keo</button>
-            <button class="primary-button" data-process-key="zDown">Độ cao của Z hạ</button>
-            <button class="primary-button" data-process-key="zSafe">Độ cao Z an toàn</button>
-            <button class="primary-button" data-process-key="speed">Tốc độ</button>
-            <button id="import-cad-to-process-button" class="primary-button">Import CAD → Process</button>
-            <button id="send-cad-x-button" class="primary-button">Send CAD X</button>
-          </div>
-          <div class="action-group right">
-            <button class="primary-button secondary-tone" data-run-action="resume">Resume</button>
-            <button class="primary-button secondary-tone" data-run-action="pause">Pause</button>
-            <button class="primary-button" data-run-action="start">Start</button>
           </div>
         </div>
       </section>
@@ -337,4 +345,5 @@
 
   <script src="app.js"></script>
 </body>
+
 </html>

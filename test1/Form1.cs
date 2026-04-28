@@ -195,6 +195,10 @@ namespace test1
                         await HandleProcessValueAsync(GetString(payload, "key"), GetString(payload, "value"));
                         break;
 
+                    case "setProcessRowValue":
+                        await HandleProcessRowValueAsync(GetInt(payload, "index", -1), GetString(payload, "field"), GetString(payload, "value"));
+                        break;
+
                     case "runAction":
                         await NotifyAsync("info", "DXF RUN", "Các nút Resume, Pause, Start đã có UI HTML. Phần map biến PLC sẽ nối tiếp ở bước sau.");
                         break;
@@ -462,6 +466,17 @@ namespace test1
             
             await PushDxfStateAsync();
             await NotifyAsync("success", "Cấu hình", $"Đã cập nhật {key} = {value}");
+        }
+
+        private async Task HandleProcessRowValueAsync(int index, string field, string value)
+        {
+            if (index < 0 || index >= processRows.Count) return;
+            var row = processRows[index];
+            if (field == "mcode") row.MCodeValue = value;
+            else if (field == "dwell") row.Dwell = value;
+            else if (field == "speed") row.Speed = value;
+
+            await PushDxfStateAsync();
         }
 
         private void LoadCadDocument(string filePath)
@@ -919,18 +934,21 @@ namespace test1
             if (string.IsNullOrWhiteSpace(motionType)) return 0;
             string s = motionType.Trim().ToLowerInvariant();
             
-            bool isEnd = s.Contains("end") || !s.Contains("cont"); // Mặc định là END nếu không chỉ định rõ Continuous
+            bool isEnd = s.Contains("end");
+            bool isContinuousPositioning = s.Contains("positioning");
 
-            // Theo bảng lệnh Hex:
-            // Line (Đường thẳng): 0x100A (END), 0xD00A (Continuous Path)
-            // Arc CW (Cung thuận chiều): 0x100F (END), 0xD00F (Continuous Path)
-            // Arc CCW (Cung ngược chiều): 0x1010 (END), 0xD010 (Continuous Path)
+            // Hex mapping rule (placeholder for Continuous Positioning = 0x300A/0x300F)
+            // Lệnh End: 0x10...
+            // Lệnh Continuous Positioning: 0x30... (hoặc mã khác theo thực tế PLC)
+            // Lệnh Continuous Path: 0xD0...
             
-            if (s.Contains("line") || s.Contains("đường") || s.Contains("duong")) return isEnd ? 0x100A : 0xD00A;
-            if (s.Contains("arc") && s.Contains("ccw")) return isEnd ? 0x1010 : 0xD010;
-            if (s.Contains("arc") && s.Contains("cw")) return isEnd ? 0x100F : 0xD00F;
-            if (s.Contains("arc") || s.Contains("cung")) return isEnd ? 0x100F : 0xD00F; // Mặc định cung thuận chiều
-            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam") || s.Contains("tròn") || s.Contains("tron")) return isEnd ? 0x100F : 0xD00F;
+            int prefix = isEnd ? 0x1000 : (isContinuousPositioning ? 0x3000 : 0xD000);
+
+            if (s.Contains("line") || s.Contains("đường") || s.Contains("duong")) return prefix | 0x000A;
+            if (s.Contains("arc") && s.Contains("ccw")) return prefix | 0x0010;
+            if (s.Contains("arc") && s.Contains("cw")) return prefix | 0x000F;
+            if (s.Contains("arc") || s.Contains("cung")) return prefix | 0x000F;
+            if (s.Contains("circle") || s.Contains("tâm") || s.Contains("tam") || s.Contains("tròn") || s.Contains("tron")) return prefix | 0x000F;
             
             return 0;
         }
@@ -1122,12 +1140,27 @@ namespace test1
 
             var paths = GetConnectedPathsFromCad(activeCadDocument.Primitives);
 
-            foreach (var path in paths)
+            for (int pathIdx = 0; pathIdx < paths.Count; pathIdx++)
             {
+                var path = paths[pathIdx];
+                bool isLastPath = (pathIdx == paths.Count - 1);
+
                 for (int pIdx = 0; pIdx < path.Count; pIdx++)
                 {
                     var prim = path[pIdx];
                     if (prim.Points == null || prim.Points.Count < 2) continue;
+
+                    bool isLastInPath = (pIdx == path.Count - 1);
+
+                    string suffix;
+                    if (isLastInPath)
+                    {
+                        suffix = isLastPath ? " (End)" : " (Continuous Positioning)";
+                    }
+                    else
+                    {
+                        suffix = " (Continuous Path)";
+                    }
 
                     // If primitive is Line or Polyline, emit its points
                     if (prim.SourceType.Contains("Line") || prim.SourceType.Contains("Polyline"))
@@ -1135,10 +1168,10 @@ namespace test1
                         for (int i = 1; i < prim.Points.Count; i++) // skip first point since it's just the start
                         {
                             bool isLastInPrim = (i == prim.Points.Count - 1);
-                            bool isLastInPath = isLastInPrim && (pIdx == path.Count - 1);
+                            string currentSuffix = (isLastInPrim && isLastInPath) ? suffix : " (Continuous Path)";
 
                             var row = new ProcessRow();
-                            row.MotionType = "Line" + (isLastInPath ? " (End)" : " (Continuous)");
+                            row.MotionType = "Line" + currentSuffix;
                             row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", prim.Points[i].X, prim.Points[i].Y);
                             row.CenterCoordinate = string.Empty;
                             result.Add(row);
@@ -1146,12 +1179,11 @@ namespace test1
                     }
                     else if (prim.SourceType.Contains("Arc") || prim.SourceType.Contains("Circle"))
                     {
-                        bool isLastInPath = (pIdx == path.Count - 1);
                         var row = new ProcessRow();
                         string arcType = prim.IsCw ? "Arc CW" : "Arc CCW";
                         if (prim.SourceType.Contains("Circle")) arcType = "Circle";
 
-                        row.MotionType = arcType + (isLastInPath ? " (End)" : " (Continuous)");
+                        row.MotionType = arcType + suffix;
                         
                         var endPt = prim.Points.Last();
                         row.EndCoordinate = string.Format(CultureInfo.InvariantCulture, "{0:0.###};{1:0.###}", endPt.X, endPt.Y);
@@ -1390,5 +1422,7 @@ namespace test1
             public string Status { get; set; }
             public string Message { get; set; }
         }
+
+
     }
 }
