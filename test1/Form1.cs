@@ -44,7 +44,7 @@ namespace test1
 
         private PLCCommunication plcComm;
         private SiemensCommunication s7Comm;
-        private bool IsAnyPlcConnected => (IsAnyPlcConnected) || (s7Comm != null && s7Comm.IsConnected);
+        private bool IsAnyPlcConnected => (plcComm != null && plcComm.IsConnected) || (s7Comm != null && s7Comm.IsConnected);
 
         private bool IsSiemensAddress(string address)
         {
@@ -61,8 +61,8 @@ namespace test1
                 if (s7Comm == null || !s7Comm.IsConnected) throw new Exception("Siemens PLC disconnected");
                 return s7Comm.ReadInt32FromDevicePath(path);
             }
-            if (!IsAnyPlcConnected) throw new Exception("Mitsu PLC disconnected");
-            return SafeReadDeviceValue(path);
+            if (plcComm == null || !plcComm.IsConnected) throw new Exception("Mitsu PLC disconnected");
+            return plcComm.ReadDeviceValue(path);
         }
 
         private void SafeWriteDeviceValue(string path, int value)
@@ -74,8 +74,8 @@ namespace test1
             }
             else
             {
-                if (!IsAnyPlcConnected) throw new Exception("Mitsu PLC disconnected");
-                SafeWriteDeviceValue(path, value);
+                if (plcComm == null || !plcComm.IsConnected) throw new Exception("Mitsu PLC disconnected");
+                plcComm.WriteDeviceValue(path, value);
             }
         }
 
@@ -86,15 +86,15 @@ namespace test1
                 if (s7Comm == null || !s7Comm.IsConnected) { used = ""; return -1; }
                 return s7Comm.WriteInt32ToDevicePath(path, value, out used);
             }
-            if (!IsAnyPlcConnected) { used = ""; return -1; }
-            return SafeWriteInt32ToDevicePath(path, value, out used);
+            if (plcComm == null || !plcComm.IsConnected) { used = ""; return -1; }
+            return plcComm.WriteInt32ToDevicePath(path, value, out used);
         }
 
         private int[] SafeReadDeviceRange(string path, int count)
         {
             if (IsSiemensAddress(path)) throw new NotImplementedException("Siemens range read not implemented");
-            if (!IsAnyPlcConnected) throw new Exception("Mitsu PLC disconnected");
-            return SafeReadDeviceRange(path, count);
+            if (plcComm == null || !plcComm.IsConnected) throw new Exception("Mitsu PLC disconnected");
+            return plcComm.ReadDeviceRange(path, count);
         }
         private CadDocumentService.CadLoadResult activeCadDocument;
         private bool webReady;
