@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
@@ -215,6 +215,32 @@ namespace test1
         {
             if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
 
+            // Nếu là buffer (U\G), đọc 2 words để thành 32-bit
+            if (TryParseUDevicePath(deviceName, out int u, out int g))
+            {
+                try
+                {
+                    int[] buf = ReadBuffer(u, g, 2);
+                    return (buf[1] << 16) | (buf[0] & 0xFFFF);
+                }
+                catch
+                {
+                    // Fallback to GetDevice
+                }
+            }
+
+            // Nếu là thanh ghi D, đọc 2 words liên tiếp để ghép thành 32-bit
+            if (deviceName.StartsWith("D", StringComparison.OrdinalIgnoreCase) && TryGetNextWordDevice(deviceName, out string nextWordDevice))
+            {
+                int resLow = plcDevice.GetDevice(deviceName, out int low);
+                if (resLow != 0) throw new Exception($"Lỗi GetDevice {deviceName}: {GetErrorMessage(resLow)}");
+
+                int resHigh = plcDevice.GetDevice(nextWordDevice, out int high);
+                if (resHigh != 0) throw new Exception($"Lỗi GetDevice {nextWordDevice}: {GetErrorMessage(resHigh)}");
+
+                return (high << 16) | (low & 0xFFFF);
+            }
+
             int value = 0;
             int result = plcDevice.GetDevice(deviceName, out value);
             if (result == 0) return value;
@@ -226,10 +252,10 @@ namespace test1
         {
             if (!isConnected) throw new InvalidOperationException("Chưa kết nối PLC");
 
-            int result = plcDevice.SetDevice(deviceName, value);
+            int result = WriteInt32ToDevicePath(deviceName, value, out string method);
             if (result != 0)
             {
-                throw new Exception($"Lỗi SetDevice {deviceName}: {GetErrorMessage(result)}");
+                throw new Exception($"Lỗi {method} {deviceName}: {GetErrorMessage(result)}");
             }
         }
 
@@ -268,7 +294,32 @@ namespace test1
 
         public int WriteInt32ToDevicePath(string devicePath, int value, out string usedMethod)
         {
-            if (TryGetNextWordDevice(devicePath, out string nextWordDevice))
+            usedMethod = "";
+            if (string.IsNullOrWhiteSpace(devicePath))
+                return -1;
+
+            if (TryParseUDevicePath(devicePath, out int u, out int g))
+            {
+                usedMethod = "WriteBuffer x2 (32-bit)";
+                short lowWord = (short)(value & 0xFFFF);
+                short highWord = (short)((value >> 16) & 0xFFFF);
+                try
+                {
+                    return WriteBuffer(u, g, new short[] { lowWord, highWord });
+                }
+                catch
+                {
+                    // Fallback below
+                }
+            }
+
+            // Chỉ ghi 32-bit cho thanh ghi D, W, R hoặc buffer U\G để tránh lỗi với Bit Device (M, X, Y)
+            bool is32BitTarget = devicePath.StartsWith("D", StringComparison.OrdinalIgnoreCase) || 
+                                 devicePath.StartsWith("W", StringComparison.OrdinalIgnoreCase) ||
+                                 devicePath.StartsWith("R", StringComparison.OrdinalIgnoreCase) ||
+                                 devicePath.StartsWith("U", StringComparison.OrdinalIgnoreCase);
+
+            if (is32BitTarget && TryGetNextWordDevice(devicePath, out string nextWordDevice))
             {
                 usedMethod = "SetDevice2 x2 (Low word -> High word)";
                 return WriteInt32ByWords(devicePath, nextWordDevice, value);
