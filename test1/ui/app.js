@@ -56,9 +56,14 @@ function cacheDom() {
   dom.placeholderButtons = Array.from(document.querySelectorAll("[data-placeholder]"));
   dom.themeToggle = document.getElementById("theme-toggle");
   dom.connectButton = document.getElementById("connect-button");
+  dom.connectS7Button = document.getElementById("connect-s7-button");
   dom.plcIp = document.getElementById("plc-ip");
   dom.plcPort = document.getElementById("plc-port");
   dom.connectionBanner = document.getElementById("connection-banner");
+  dom.mitsuDot = document.getElementById("mitsu-status-dot");
+  dom.mitsuText = document.getElementById("mitsu-status-text");
+  dom.s7Dot = document.getElementById("s7-status-dot");
+  dom.s7Text = document.getElementById("s7-status-text");
   dom.connectionMeta = document.getElementById("connection-meta");
   dom.sidebarStatus = document.getElementById("sidebar-status");
   dom.velocitySlider = document.getElementById("velocity-slider");
@@ -133,11 +138,24 @@ function bindEvents() {
   });
 
   dom.connectButton.addEventListener("click", () => {
-    post("connectToggle", {
+    post("connectMitsu", {
       ip: dom.plcIp.value.trim(),
       port: parseInt(dom.plcPort.value, 10) || 0
     });
   });
+
+  if (dom.connectS7Button) {
+    dom.connectS7Button.addEventListener("click", () => {
+      const s7IpEl = document.getElementById('s7-ip');
+      const s7RackEl = document.getElementById('s7-rack');
+      const s7SlotEl = document.getElementById('s7-slot');
+      post("connectS7", {
+        s7Ip: s7IpEl ? s7IpEl.value.trim() : "192.168.0.1",
+        s7Rack: s7RackEl ? (parseInt(s7RackEl.value, 10) || 0) : 0,
+        s7Slot: s7SlotEl ? (parseInt(s7SlotEl.value, 10) || 1) : 1
+      });
+    });
+  }
 
   dom.velocitySlider.addEventListener("input", () => {
     const rawValue = parseInt(dom.velocitySlider.value, 10) || 0;
@@ -418,12 +436,36 @@ function renderControl() {
   const connection = state.control.connection || {};
   syncInputValue(dom.plcIp, connection.ip || "");
   syncInputValue(dom.plcPort, connection.port != null ? String(connection.port) : "");
-  dom.connectButton.textContent = connection.buttonText || "CONNECT SYSTEM";
-  dom.connectionBanner.textContent = (connection.banner || "PLC disconnected").toUpperCase();
-  dom.connectionBanner.classList.toggle("connected", !!connection.connected);
-  dom.connectionBanner.classList.toggle("disconnected", !connection.connected);
-  dom.connectionMeta.textContent = connection.meta || "";
-  dom.sidebarStatus.textContent = connection.banner || "PLC disconnected";
+  dom.connectButton.textContent = connection.buttonText || "CONNECT PLC_Q";
+
+  // Update dual status dots
+  const banner = connection.banner || "";
+  const mitsuOk = banner.includes("Mitsu: OK");
+  const s7Ok = banner.includes("S7: OK");
+
+  if (dom.mitsuDot) {
+    dom.mitsuDot.style.background = mitsuOk ? "#22c55e" : "#ef4444";
+    dom.mitsuDot.title = mitsuOk ? "Connected" : "Disconnected";
+  }
+  if (dom.mitsuText) {
+    dom.mitsuText.textContent = mitsuOk ? "OK" : "DC";
+    dom.mitsuText.style.color = mitsuOk ? "#22c55e" : "#ef4444";
+  }
+  if (dom.s7Dot) {
+    dom.s7Dot.style.background = s7Ok ? "#22c55e" : "#ef4444";
+    dom.s7Dot.title = s7Ok ? "Connected" : "Disconnected";
+  }
+  if (dom.s7Text) {
+    dom.s7Text.textContent = s7Ok ? "OK" : "DC";
+    dom.s7Text.style.color = s7Ok ? "#22c55e" : "#ef4444";
+  }
+
+  if (dom.connectionBanner) {
+    dom.connectionBanner.textContent = (banner || "PLC disconnected").toUpperCase();
+    dom.connectionBanner.classList.toggle("connected", !!connection.connected);
+    dom.connectionBanner.classList.toggle("disconnected", !connection.connected);
+  }
+  dom.sidebarStatus.textContent = connection.banner || "Mitsu: DC | S7: DC";
 
   (state.control.coordinates || []).forEach((coordinate) => {
     const key = coordinate.key;
