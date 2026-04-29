@@ -309,7 +309,7 @@ namespace test1
         private async Task HandleConnectToggleAsync(Dictionary<string, object> payload)
         {
             plcIpAddress = GetString(payload, "ip", plcIpAddress).Trim();
-            plcPort = Math.Max(1, GetInt(payload, "port", plcPort));
+            plcPort = Math.Max(0, GetInt(payload, "port", plcPort));
             s7IpAddress = GetString(payload, "s7Ip", s7IpAddress).Trim();
             s7Rack = (short)GetInt(payload, "s7Rack", s7Rack);
             s7Slot = (short)GetInt(payload, "s7Slot", s7Slot);
@@ -373,7 +373,7 @@ namespace test1
         private async Task HandleConnectMitsuAsync(Dictionary<string, object> payload)
         {
             plcIpAddress = GetString(payload, "ip", plcIpAddress).Trim();
-            plcPort = Math.Max(1, GetInt(payload, "port", plcPort));
+            plcPort = Math.Max(0, GetInt(payload, "port", plcPort));
 
             if (plcComm != null && plcComm.IsConnected)
             {
