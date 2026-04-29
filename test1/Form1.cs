@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using System.Text;
+using System.Threading;
 
 namespace test1
 {
@@ -1656,11 +1657,17 @@ namespace test1
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            plcPollTimer.Stop();
+            mitsuCts?.Cancel();
+            s7Cts?.Cancel();
             if (plcComm != null)
             {
                 plcComm.Dispose();
                 plcComm = null;
+            }
+            if (s7Comm != null)
+            {
+                s7Comm.Dispose();
+                s7Comm = null;
             }
 
             base.OnFormClosing(e);
