@@ -23,7 +23,8 @@ namespace test1
         private const string EmergencyStopRegister = "M3100";
 
         private readonly WebView2 webView;
-        private readonly Timer plcPollTimer = new Timer();
+        private CancellationTokenSource mitsuCts;
+        private CancellationTokenSource s7Cts;
 
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer
         {
@@ -136,9 +137,6 @@ namespace test1
             InitializeProcessRows();
             UpdateConnectionState(false, "PLC disconnected");
             UpdateIntegrityState(false);
-
-            plcPollTimer.Interval = 500;
-            plcPollTimer.Tick += PlcPollTimer_Tick;
 
             Shown += async (sender, e) => await InitializeWebViewAsync();
         }
@@ -350,7 +348,15 @@ namespace test1
 
                 UpdateConnectionState(true, banner);
                 UpdateIntegrityState(true);
-                plcPollTimer.Start();
+                
+                mitsuCts?.Cancel();
+                mitsuCts = new CancellationTokenSource();
+                _ = Task.Run(() => MitsuPollingLoop(mitsuCts.Token));
+
+                s7Cts?.Cancel();
+                s7Cts = new CancellationTokenSource();
+                _ = Task.Run(() => S7PollingLoop(s7Cts.Token));
+
                 await PushControlStateAsync();
                 await NotifyAsync("success", "PLC", $"Kết nối thành công. {banner}");
             }
@@ -387,7 +393,12 @@ namespace test1
                 if (ok)
                 {
                     UpdateIntegrityState(true);
-                    if (!plcPollTimer.Enabled) plcPollTimer.Start();
+                    
+                    // Start independent Mitsu polling loop
+                    mitsuCts?.Cancel();
+                    mitsuCts = new CancellationTokenSource();
+                    _ = Task.Run(() => MitsuPollingLoop(mitsuCts.Token));
+
                     await NotifyAsync("success", "Mitsubishi", $"Kết nối thành công ({plcIpAddress}).");
                 }
                 else
@@ -401,6 +412,44 @@ namespace test1
                 UpdateBanner();
                 await PushControlStateAsync();
                 await NotifyAsync("error", "Mitsubishi", ex.Message);
+            }
+        }
+
+        private async Task MitsuPollingLoop(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (plcComm == null || !plcComm.IsConnected) break;
+
+                try
+                {
+                    coordinateX = plcComm.ReadDeviceValue(CoordinateXRegister);
+                    coordinateY = plcComm.ReadDeviceValue(CoordinateYRegister);
+                    coordinateZ = plcComm.ReadDeviceValue(CoordinateZRegister);
+                    velocityValue = plcComm.ReadDeviceValue(VelocityRegister);
+
+                    foreach (MonitorRow row in monitorRows)
+                    {
+                        if (!IsSiemensAddress(row.Register))
+                        {
+                            int value = plcComm.ReadDeviceValue(row.Register);
+                            row.Value = value.ToString(CultureInfo.InvariantCulture);
+                            row.Status = "OK";
+                        }
+                    }
+
+                    // Also updates Axis Monitor data
+                    await PushControlStateAsync();
+                    await PushTelemetryStateAsync();
+                }
+                catch (Exception ex)
+                {
+                    UpdateIntegrityFault(ex.Message);
+                    await PushControlStateAsync();
+                    break; // Exit loop on failure
+                }
+
+                await Task.Delay(200, ct);
             }
         }
 
@@ -429,7 +478,12 @@ namespace test1
                 if (ok)
                 {
                     UpdateIntegrityState(true);
-                    if (!plcPollTimer.Enabled) plcPollTimer.Start();
+                    
+                    // Start independent S7 polling loop
+                    s7Cts?.Cancel();
+                    s7Cts = new CancellationTokenSource();
+                    _ = Task.Run(() => S7PollingLoop(s7Cts.Token));
+
                     await NotifyAsync("success", "S7-1200", $"Kết nối thành công ({s7IpAddress}).");
                 }
                 else
@@ -443,6 +497,41 @@ namespace test1
                 UpdateBanner();
                 await PushControlStateAsync();
                 await NotifyAsync("error", "S7-1200", ex.Message);
+            }
+        }
+
+        private async Task S7PollingLoop(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (s7Comm == null || !s7Comm.IsConnected) break;
+
+                try
+                {
+                    foreach (MonitorRow row in monitorRows)
+                    {
+                        if (IsSiemensAddress(row.Register))
+                        {
+                            int value = s7Comm.ReadInt32FromDevicePath(row.Register);
+                            row.Value = value.ToString(CultureInfo.InvariantCulture);
+                            row.Status = "OK";
+                        }
+                    }
+
+                    await PushControlStateAsync();
+                }
+                catch (Exception ex)
+                {
+                    // For S7, we might not want to stop everything on one error
+                    foreach (MonitorRow row in monitorRows)
+                    {
+                        if (IsSiemensAddress(row.Register)) row.Status = "Error: " + ex.Message;
+                    }
+                    await PushControlStateAsync();
+                    break; 
+                }
+
+                await Task.Delay(500, ct);
             }
         }
 
@@ -659,44 +748,10 @@ namespace test1
             assignedPointKeys.Clear();
         }
 
-        private async void PlcPollTimer_Tick(object sender, EventArgs e)
-        {
-            if (!IsAnyPlcConnected)
-            {
-                return;
-            }
-
-            try
-            {
-                coordinateX = SafeReadDeviceValue(CoordinateXRegister);
-                coordinateY = SafeReadDeviceValue(CoordinateYRegister);
-                coordinateZ = SafeReadDeviceValue(CoordinateZRegister);
-                velocityValue = SafeReadDeviceValue(VelocityRegister);
-                UpdateIntegrityState(true);
-
-                foreach (MonitorRow row in monitorRows)
-                {
-                    int value = SafeReadDeviceValue(row.Register);
-                    row.Value = value.ToString(CultureInfo.InvariantCulture);
-                    row.Status = "OK";
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateIntegrityFault(ex.Message);
-                foreach (MonitorRow row in monitorRows)
-                {
-                    row.Status = ex.Message;
-                }
-            }
-
-            await PushControlStateAsync();
-            await PushTelemetryStateAsync();
-        }
-
         private void DisconnectPlc(bool updateUi = true)
         {
-            plcPollTimer.Stop();
+            mitsuCts?.Cancel();
+            s7Cts?.Cancel();
 
             if (plcComm != null)
             {
@@ -1530,7 +1585,17 @@ namespace test1
             }
 
             string json = serializer.Serialize(new { type, payload });
-            await webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+            
+            if (webView.InvokeRequired)
+            {
+                webView.Invoke(new Action(() => {
+                    _ = webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+                }));
+            }
+            else
+            {
+                await webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+            }
         }
 
         private static Dictionary<string, object> GetMap(Dictionary<string, object> source, string key)
