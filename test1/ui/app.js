@@ -116,6 +116,15 @@ function cacheDom() {
   dom.loginConfirm = document.getElementById("login-confirm-button");
   dom.loginError = document.getElementById("login-error");
   dom.logoutButton = document.getElementById("logout-button");
+
+  // Removed elements (null checks needed)
+  dom.velocitySlider = document.getElementById("velocity-slider");
+  dom.velocityValue = document.getElementById("velocity-value");
+  dom.velocityRaw = document.getElementById("velocity-raw");
+  dom.velocitySubtitle = document.getElementById("velocity-subtitle");
+  dom.integrityState = document.getElementById("integrity-state");
+  dom.integrityDetail = document.getElementById("integrity-detail");
+  dom.connectionBanner = document.getElementById("connection-banner");
 }
 
 function bindEvents() {
@@ -166,15 +175,19 @@ function bindEvents() {
     post("setTheme", { theme: state.theme });
   });
 
-  dom.connectButton.addEventListener("click", () => {
-    post("connectMitsu", {
-      ip: dom.plcIp.value.trim(),
-      port: parseInt(dom.plcPort.value, 10) || 0
+  if (dom.connectButton) {
+    dom.connectButton.addEventListener("click", () => {
+      showToast("info", "Mitsubishi", "Đang kết nối...");
+      post("connectMitsu", {
+        ip: dom.plcIp.value.trim(),
+        port: parseInt(dom.plcPort.value, 10) || 0
+      });
     });
-  });
+  }
 
   if (dom.connectS7Button) {
     dom.connectS7Button.addEventListener("click", () => {
+      showToast("info", "S7-1200", "Đang kết nối...");
       const s7IpEl = document.getElementById('s7-ip');
       const s7RackEl = document.getElementById('s7-rack');
       const s7SlotEl = document.getElementById('s7-slot');
@@ -186,17 +199,19 @@ function bindEvents() {
     });
   }
 
-  dom.velocitySlider.addEventListener("input", () => {
-    const rawValue = parseInt(dom.velocitySlider.value, 10) || 0;
-    dom.velocityValue.textContent = (rawValue / 10).toFixed(1);
-    dom.velocityRaw.textContent = `Raw: ${rawValue} (${state.control.velocity.register || "D406"})`;
-  });
-
-  dom.velocitySlider.addEventListener("change", () => {
-    post("setVelocity", {
-      value: parseInt(dom.velocitySlider.value, 10) || 0
+  if (dom.velocitySlider) {
+    dom.velocitySlider.addEventListener("input", () => {
+      const rawValue = parseInt(dom.velocitySlider.value, 10) || 0;
+      if (dom.velocityValue) dom.velocityValue.textContent = (rawValue / 10).toFixed(1);
+      if (dom.velocityRaw) dom.velocityRaw.textContent = `Raw: ${rawValue} (${state.control.velocity.register || "D406"})`;
     });
-  });
+
+    dom.velocitySlider.addEventListener("change", () => {
+      post("setVelocity", {
+        value: parseInt(dom.velocitySlider.value, 10) || 0
+      });
+    });
+  }
 
   dom.addRegister.addEventListener("click", () => {
     openPrompt("Add register", "Enter a PLC register to monitor:", "", (value) => {
@@ -555,18 +570,22 @@ function renderControl() {
     setText(`coord-${key}-raw`, `Raw: ${coordinate.raw || 0} (${coordinate.register || ""})`);
   });
 
-  const velocity = state.control.velocity || {};
-  dom.velocitySlider.min = velocity.min != null ? velocity.min : 0;
-  dom.velocitySlider.max = velocity.max != null ? velocity.max : 50;
-  dom.velocitySlider.value = velocity.value != null ? velocity.value : 0;
-  dom.velocityValue.textContent = velocity.display || "0.0";
-  dom.velocityRaw.textContent = `Raw: ${velocity.value || 0} (${velocity.register || "D406"})`;
-  dom.velocitySubtitle.textContent = `Target write velocity (${velocity.register || "D406"})`;
+  if (dom.velocitySlider) {
+    const velocity = state.control.velocity || {};
+    dom.velocitySlider.min = velocity.min != null ? velocity.min : 0;
+    dom.velocitySlider.max = velocity.max != null ? velocity.max : 50;
+    dom.velocitySlider.value = velocity.value != null ? velocity.value : 0;
+    if (dom.velocityValue) dom.velocityValue.textContent = velocity.display || "0.0";
+    if (dom.velocityRaw) dom.velocityRaw.textContent = `Raw: ${velocity.value || 0} (${velocity.register || "D406"})`;
+    if (dom.velocitySubtitle) dom.velocitySubtitle.textContent = `Target write velocity (${velocity.register || "D406"})`;
+  }
 
-  const integrity = state.control.integrity || {};
-  dom.integrityState.textContent = integrity.state || "IDLE";
-  dom.integrityState.className = `integrity-state ${integrity.tone || "idle"}`;
-  dom.integrityDetail.textContent = integrity.detail || "STOP";
+  if (dom.integrityState) {
+    const integrity = state.control.integrity || {};
+    dom.integrityState.textContent = integrity.state || "IDLE";
+    dom.integrityState.className = `integrity-state ${integrity.tone || "idle"}`;
+    if (dom.integrityDetail) dom.integrityDetail.textContent = integrity.detail || "STOP";
+  }
 
   renderMonitorTable();
   renderAxisMonitor();
