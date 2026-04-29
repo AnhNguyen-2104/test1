@@ -35,18 +35,22 @@ namespace test1
             try
             {
                 if (isConnected) return true;
-                plcDevice.ActLogicalStationNumber = 0;
+                
+                // Sử dụng Port làm Logical Station Number (mặc định là 0 nếu không nhập)
+                plcDevice.ActLogicalStationNumber = Port;
+                
                 int result = plcDevice.Open();
                 if (result == 0)
                 {
                     isConnected = true;
                     return true;
                 }
-                return false;
+                
+                throw new Exception(string.Format("Mã lỗi MX Component: 0x{0:X8}. Vui lòng kiểm tra Logical Station Number ({1}) trong Communication Setup Utility.", result, Port));
             }
             catch (Exception ex)
             {
-                throw new Exception($"Lỗi kết nối PLC: {ex.Message}");
+                throw new Exception($"Lỗi kết nối PLC Mitsubishi: {ex.Message}");
             }
         }
 

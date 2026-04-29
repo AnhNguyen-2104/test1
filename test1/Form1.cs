@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using System.Text;
+using System.Threading;
 
 namespace test1
 {
@@ -23,7 +24,8 @@ namespace test1
         private const string EmergencyStopRegister = "M3100";
 
         private readonly WebView2 webView;
-        private readonly Timer plcPollTimer = new Timer();
+        private CancellationTokenSource mitsuCts;
+        private CancellationTokenSource s7Cts;
 
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer
         {
@@ -43,13 +45,69 @@ namespace test1
         private readonly List<LogEntry> logs = new List<LogEntry>();
 
         private PLCCommunication plcComm;
+        private SiemensCommunication s7Comm;
+        private bool IsAnyPlcConnected => (plcComm != null && plcComm.IsConnected) || (s7Comm != null && s7Comm.IsConnected);
+
+        private bool IsSiemensAddress(string address)
+        {
+            if (string.IsNullOrWhiteSpace(address)) return false;
+            string u = address.Trim().ToUpperInvariant();
+            if (u.StartsWith("DB") || (u.StartsWith("I") && !u.StartsWith("IX")) || u.StartsWith("Q") || (u.StartsWith("M") && u.Contains("."))) return true;
+            return false;
+        }
+
+        private int SafeReadDeviceValue(string path)
+        {
+            if (IsSiemensAddress(path))
+            {
+                if (s7Comm == null || !s7Comm.IsConnected) throw new Exception("Siemens PLC disconnected");
+                return s7Comm.ReadInt32FromDevicePath(path);
+            }
+            if (plcComm == null || !plcComm.IsConnected) throw new Exception("Mitsu PLC disconnected");
+            return plcComm.ReadDeviceValue(path);
+        }
+
+        private void SafeWriteDeviceValue(string path, int value)
+        {
+            if (IsSiemensAddress(path))
+            {
+                if (s7Comm == null || !s7Comm.IsConnected) throw new Exception("Siemens PLC disconnected");
+                s7Comm.WriteInt32ToDevicePath(path, value, out _);
+            }
+            else
+            {
+                if (plcComm == null || !plcComm.IsConnected) throw new Exception("Mitsu PLC disconnected");
+                plcComm.WriteDeviceValue(path, value);
+            }
+        }
+
+        private int SafeWriteInt32ToDevicePath(string path, int value, out string used)
+        {
+            if (IsSiemensAddress(path))
+            {
+                if (s7Comm == null || !s7Comm.IsConnected) { used = ""; return -1; }
+                return s7Comm.WriteInt32ToDevicePath(path, value, out used);
+            }
+            if (plcComm == null || !plcComm.IsConnected) { used = ""; return -1; }
+            return plcComm.WriteInt32ToDevicePath(path, value, out used);
+        }
+
+        private int[] SafeReadDeviceRange(string path, int count)
+        {
+            if (IsSiemensAddress(path)) throw new NotImplementedException("Siemens range read not implemented");
+            if (plcComm == null || !plcComm.IsConnected) throw new Exception("Mitsu PLC disconnected");
+            return plcComm.ReadDeviceRange(path, count);
+        }
         private CadDocumentService.CadLoadResult activeCadDocument;
         private bool webReady;
         private string currentView = "control";
         private string currentTheme = "dark";
         private string plcIpAddress = "192.168.3.39";
-        private int plcPort = 3000;
-        private string connectionBanner = "PLC disconnected";
+        private int plcPort = 0;
+        private string s7IpAddress = "192.168.0.1";
+        private short s7Rack = 0;
+        private short s7Slot = 1;
+        private string connectionBanner = "Mitsu: DC | S7: DC";
         private int coordinateX;
         private int coordinateY;
         private int coordinateZ;
@@ -80,9 +138,6 @@ namespace test1
             InitializeProcessRows();
             UpdateConnectionState(false, "PLC disconnected");
             UpdateIntegrityState(false);
-
-            plcPollTimer.Interval = 500;
-            plcPollTimer.Tick += PlcPollTimer_Tick;
 
             Shown += async (sender, e) => await InitializeWebViewAsync();
         }
@@ -152,6 +207,14 @@ namespace test1
 
                     case "connectToggle":
                         await HandleConnectToggleAsync(payload);
+                        break;
+
+                    case "connectMitsu":
+                        await HandleConnectMitsuAsync(payload);
+                        break;
+
+                    case "connectS7":
+                        await HandleConnectS7Async(payload);
                         break;
 
                     case "setVelocity":
@@ -246,12 +309,15 @@ namespace test1
         private async Task HandleConnectToggleAsync(Dictionary<string, object> payload)
         {
             plcIpAddress = GetString(payload, "ip", plcIpAddress).Trim();
-            plcPort = Math.Max(1, GetInt(payload, "port", plcPort));
+            plcPort = Math.Max(0, GetInt(payload, "port", plcPort));
+            s7IpAddress = GetString(payload, "s7Ip", s7IpAddress).Trim();
+            s7Rack = (short)GetInt(payload, "s7Rack", s7Rack);
+            s7Slot = (short)GetInt(payload, "s7Slot", s7Slot);
 
-            if (plcComm != null && plcComm.IsConnected)
+            if (IsAnyPlcConnected)
             {
                 DisconnectPlc();
-                await NotifyAsync("info", "PLC", "Đã ngắt kết nối PLC.");
+                await NotifyAsync("info", "PLC", "Đã ngắt kết nối hệ thống.");
                 await PushControlStateAsync();
                 return;
             }
@@ -259,41 +325,232 @@ namespace test1
             try
             {
                 DisconnectPlc(false);
-
+                
+                // Kết nối Mitsubishi
                 plcComm = new PLCCommunication(plcIpAddress, plcPort);
-                if (!plcComm.Connect())
+                bool mitsuOk = plcComm.Connect();
+
+                // Kết nối Siemens
+                s7Comm = new SiemensCommunication(s7IpAddress, s7Rack, s7Slot);
+                bool s7Ok = (s7Comm.Connect() == 0);
+
+                string mitsuSt = mitsuOk ? "OK" : "DC";
+                string s7St = s7Ok ? "OK" : "DC";
+                string banner = $"Mitsu: {mitsuSt} | S7: {s7St}";
+
+                if (!mitsuOk && !s7Ok)
                 {
-                    UpdateConnectionState(false, "PLC disconnected");
-                    UpdateIntegrityFault("Kết nối PLC trả về lỗi.");
-                    await NotifyAsync("error", "PLC", "PLC connect trả về lỗi.");
+                    UpdateConnectionState(false, banner);
+                    UpdateIntegrityFault("Cả 2 PLC đều không kết nối được.");
+                    await NotifyAsync("error", "PLC", "Connect thất bại cả 2 PLC.");
                     await PushControlStateAsync();
                     return;
                 }
 
-                UpdateConnectionState(true, "PLC connected");
+                UpdateConnectionState(true, banner);
                 UpdateIntegrityState(true);
-                plcPollTimer.Start();
+                
+                mitsuCts?.Cancel();
+                mitsuCts = new CancellationTokenSource();
+                _ = Task.Run(() => MitsuPollingLoop(mitsuCts.Token));
+
+                s7Cts?.Cancel();
+                s7Cts = new CancellationTokenSource();
+                _ = Task.Run(() => S7PollingLoop(s7Cts.Token));
+
                 await PushControlStateAsync();
-                await NotifyAsync("success", "PLC", "Kết nối PLC thành công.");
+                await NotifyAsync("success", "PLC", $"Kết nối thành công. {banner}");
             }
             catch (Exception ex)
             {
-                UpdateConnectionState(false, "PLC disconnected");
+                UpdateConnectionState(false, "Mitsu: DC | S7: DC");
                 UpdateIntegrityFault(ex.Message);
                 await PushControlStateAsync();
                 await NotifyAsync("error", "PLC", ex.Message);
             }
         }
 
+        private async Task HandleConnectMitsuAsync(Dictionary<string, object> payload)
+        {
+            plcPort = GetInt(payload, "station", plcPort);
+
+            if (plcComm != null && plcComm.IsConnected)
+            {
+                try { plcComm.Dispose(); } catch { }
+                plcComm = null;
+                UpdateBanner();
+                await NotifyAsync("info", "Mitsubishi", "Đã ngắt kết nối Mitsubishi.");
+                await PushControlStateAsync();
+                return;
+            }
+
+            try
+            {
+                if (plcComm != null) { try { plcComm.Dispose(); } catch { } plcComm = null; }
+                plcComm = new PLCCommunication(plcIpAddress, plcPort);
+                bool ok = await Task.Run(() => plcComm.Connect());
+                UpdateBanner();
+                if (ok)
+                {
+                    UpdateIntegrityState(true);
+                    
+                    // Start independent Mitsu polling loop
+                    mitsuCts?.Cancel();
+                    mitsuCts = new CancellationTokenSource();
+                    _ = Task.Run(() => MitsuPollingLoop(mitsuCts.Token));
+
+                    await NotifyAsync("success", "Mitsubishi", $"Kết nối thành công ({plcIpAddress}).");
+                }
+                else
+                {
+                    await NotifyAsync("error", "Mitsubishi", "Kết nối thất bại.");
+                }
+                await PushControlStateAsync();
+            }
+            catch (Exception ex)
+            {
+                UpdateBanner();
+                await PushControlStateAsync();
+                await NotifyAsync("error", "Mitsubishi", ex.Message);
+            }
+        }
+
+        private async Task MitsuPollingLoop(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (plcComm == null || !plcComm.IsConnected) break;
+
+                try
+                {
+                    coordinateX = plcComm.ReadDeviceValue(CoordinateXRegister);
+                    coordinateY = plcComm.ReadDeviceValue(CoordinateYRegister);
+                    coordinateZ = plcComm.ReadDeviceValue(CoordinateZRegister);
+                    velocityValue = plcComm.ReadDeviceValue(VelocityRegister);
+
+                    foreach (MonitorRow row in monitorRows)
+                    {
+                        if (!IsSiemensAddress(row.Register))
+                        {
+                            int value = plcComm.ReadDeviceValue(row.Register);
+                            row.Value = value.ToString(CultureInfo.InvariantCulture);
+                            row.Status = "OK";
+                        }
+                    }
+
+                    // Also updates Axis Monitor data
+                    await PushControlStateAsync();
+                    await PushTelemetryStateAsync();
+                }
+                catch (Exception ex)
+                {
+                    UpdateIntegrityFault(ex.Message);
+                    await PushControlStateAsync();
+                    break; // Exit loop on failure
+                }
+
+                await Task.Delay(200, ct);
+            }
+        }
+
+        private async Task HandleConnectS7Async(Dictionary<string, object> payload)
+        {
+            s7IpAddress = GetString(payload, "s7Ip", s7IpAddress).Trim();
+            s7Rack = (short)GetInt(payload, "s7Rack", s7Rack);
+            s7Slot = (short)GetInt(payload, "s7Slot", s7Slot);
+
+            if (s7Comm != null && s7Comm.IsConnected)
+            {
+                try { s7Comm.Dispose(); } catch { }
+                s7Comm = null;
+                UpdateBanner();
+                await NotifyAsync("info", "S7-1200", "Đã ngắt kết nối Siemens S7-1200.");
+                await PushControlStateAsync();
+                return;
+            }
+
+            try
+            {
+                if (s7Comm != null) { try { s7Comm.Dispose(); } catch { } s7Comm = null; }
+                s7Comm = new SiemensCommunication(s7IpAddress, s7Rack, s7Slot);
+                bool ok = await Task.Run(() => s7Comm.Connect() == 0);
+                UpdateBanner();
+                if (ok)
+                {
+                    UpdateIntegrityState(true);
+                    
+                    // Start independent S7 polling loop
+                    s7Cts?.Cancel();
+                    s7Cts = new CancellationTokenSource();
+                    _ = Task.Run(() => S7PollingLoop(s7Cts.Token));
+
+                    await NotifyAsync("success", "S7-1200", $"Kết nối thành công ({s7IpAddress}).");
+                }
+                else
+                {
+                    await NotifyAsync("error", "S7-1200", $"Kết nối thất bại ({s7IpAddress}).");
+                }
+                await PushControlStateAsync();
+            }
+            catch (Exception ex)
+            {
+                UpdateBanner();
+                await PushControlStateAsync();
+                await NotifyAsync("error", "S7-1200", ex.Message);
+            }
+        }
+
+        private async Task S7PollingLoop(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (s7Comm == null || !s7Comm.IsConnected) break;
+
+                try
+                {
+                    foreach (MonitorRow row in monitorRows)
+                    {
+                        if (IsSiemensAddress(row.Register))
+                        {
+                            int value = s7Comm.ReadInt32FromDevicePath(row.Register);
+                            row.Value = value.ToString(CultureInfo.InvariantCulture);
+                            row.Status = "OK";
+                        }
+                    }
+
+                    await PushControlStateAsync();
+                }
+                catch (Exception ex)
+                {
+                    // For S7, we might not want to stop everything on one error
+                    foreach (MonitorRow row in monitorRows)
+                    {
+                        if (IsSiemensAddress(row.Register)) row.Status = "Error: " + ex.Message;
+                    }
+                    await PushControlStateAsync();
+                    break; 
+                }
+
+                await Task.Delay(500, ct);
+            }
+        }
+
+        private void UpdateBanner()
+        {
+            string m = (plcComm != null && plcComm.IsConnected) ? "OK" : "DC";
+            string s7 = (s7Comm != null && s7Comm.IsConnected) ? "OK" : "DC";
+            connectionBanner = $"Mitsu: {m} | S7: {s7}";
+        }
+
         private async Task HandleSetVelocityAsync(int value)
         {
             velocityValue = Math.Max(0, Math.Min(50, value));
 
-            if (plcComm != null && plcComm.IsConnected)
+            if (IsAnyPlcConnected)
             {
                 try
                 {
-                    plcComm.WriteDeviceValue(VelocityRegister, velocityValue);
+                    SafeWriteDeviceValue(VelocityRegister, velocityValue);
                     UpdateIntegrityState(true);
                     AddLogEntry(VelocityRegister, velocityValue.ToString(CultureInfo.InvariantCulture), "Write", "OK", "SetVelocity");
                 }
@@ -326,7 +583,7 @@ namespace test1
             {
                 Register = register,
                 Value = "-",
-                Status = plcComm != null && plcComm.IsConnected ? "Pending" : "Disconnected"
+                Status = IsAnyPlcConnected ? "Pending" : "Disconnected"
             });
             await PushControlStateAsync();
         }
@@ -355,7 +612,7 @@ namespace test1
                 EnsureConnected();
                 string register = GetSequentialDevice(JogBaseRegister, offset);
                 int v = active ? 1 : 0;
-                plcComm.WriteDeviceValue(register, v);
+                SafeWriteDeviceValue(register, v);
                 UpdateIntegrityState(true);
                 AddLogEntry(register, v.ToString(CultureInfo.InvariantCulture), "Write", "OK", "Jog");
             }
@@ -376,7 +633,7 @@ namespace test1
             try
             {
                 EnsureConnected();
-                plcComm.WriteDeviceValue(EmergencyStopRegister, 1);
+                SafeWriteDeviceValue(EmergencyStopRegister, 1);
                 AddLogEntry(EmergencyStopRegister, "1", "Write", "OK", "EmergencyStop");
                 UpdateIntegrityFault("Emergency stop triggered");
                 await PushControlStateAsync();
@@ -491,55 +748,14 @@ namespace test1
             assignedPointKeys.Clear();
         }
 
-        private async void PlcPollTimer_Tick(object sender, EventArgs e)
-        {
-            if (plcComm == null || !plcComm.IsConnected)
-            {
-                return;
-            }
-
-            try
-            {
-                coordinateX = plcComm.ReadDeviceValue(CoordinateXRegister);
-                coordinateY = plcComm.ReadDeviceValue(CoordinateYRegister);
-                coordinateZ = plcComm.ReadDeviceValue(CoordinateZRegister);
-                velocityValue = plcComm.ReadDeviceValue(VelocityRegister);
-                UpdateIntegrityState(true);
-
-                foreach (MonitorRow row in monitorRows)
-                {
-                    int value = plcComm.ReadDeviceValue(row.Register);
-                    row.Value = value.ToString(CultureInfo.InvariantCulture);
-                    row.Status = "OK";
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateIntegrityFault(ex.Message);
-                foreach (MonitorRow row in monitorRows)
-                {
-                    row.Status = ex.Message;
-                }
-            }
-
-            await PushControlStateAsync();
-            await PushTelemetryStateAsync();
-        }
-
         private void DisconnectPlc(bool updateUi = true)
         {
-            plcPollTimer.Stop();
+            mitsuCts?.Cancel();
+            s7Cts?.Cancel();
 
             if (plcComm != null)
             {
-                try
-                {
-                    plcComm.Dispose();
-                }
-                catch
-                {
-                }
-
+                try { plcComm.Dispose(); } catch { }
                 plcComm = null;
             }
 
@@ -573,7 +789,7 @@ namespace test1
 
         private void EnsureConnected()
         {
-            if (plcComm == null || !plcComm.IsConnected)
+            if (!IsAnyPlcConnected)
             {
                 throw new InvalidOperationException("PLC is not connected.");
             }
@@ -618,7 +834,7 @@ namespace test1
 
         private Task PushControlStateAsync()
         {
-            bool connected = plcComm != null && plcComm.IsConnected;
+            bool connected = IsAnyPlcConnected;
             object payload = new
             {
                 view = currentView,
@@ -629,7 +845,7 @@ namespace test1
                     banner = connectionBanner,
                     ip = plcIpAddress,
                     port = plcPort,
-                    meta = "MX Component logical station: 0",
+                    station = 0,
                     buttonText = connected ? "DISCONNECT SYSTEM" : "CONNECT SYSTEM"
                 },
                 coordinates = new[]
@@ -681,10 +897,50 @@ namespace test1
                     register = row.Register,
                     value = row.Value,
                     status = row.Status
-                }).ToList()
+                }).ToList(),
+                axisMonitor = BuildAxisMonitorData()
             };
 
             return PostToUiAsync("controlState", payload);
+        }
+
+        private object BuildAxisMonitorData()
+        {
+            // Đọc 32-bit từ U0\GX (2 words: Low=G, High=G+1)
+            Func<int, long> readU0G32 = (g) =>
+            {
+                try
+                {
+                    if (plcComm == null || !plcComm.IsConnected) return 0;
+                    int[] r = plcComm.ReadBuffer(0, g, 2); // U0\G{g} and U0\G{g+1}
+                    return (long)((uint)r[0] | ((uint)r[1] << 16));
+                }
+                catch { return 0; }
+            };
+
+            // Đọc 16-bit từ U0\GX (1 word) cho Md.44
+            Func<int, int> readU0G16 = (g) =>
+            {
+                try
+                {
+                    if (plcComm == null || !plcComm.IsConnected) return 0;
+                    int[] r = plcComm.ReadBuffer(0, g, 1);
+                    return r[0];
+                }
+                catch { return 0; }
+            };
+
+            return new
+            {
+                // Axis 1: Md.20=G800, Md.21=G802, Md.22=G804, Md.28=G812, Md.44=G835
+                ax1 = new { cmdPos = readU0G32(800), actPos = readU0G32(802), cmdSpd = readU0G32(804), actSpd = readU0G32(812), pointNo = readU0G16(835) },
+                // Axis 2: Md.20=G900, Md.21=G902, Md.22=G904, Md.28=G912, Md.44=G935
+                ax2 = new { cmdPos = readU0G32(900), actPos = readU0G32(902), cmdSpd = readU0G32(904), actSpd = readU0G32(912), pointNo = readU0G16(935) },
+                // Axis 3: Md.20=G1000, Md.21=G1002, Md.22=G1004, Md.28=G1012, Md.44=G1035
+                ax3 = new { cmdPos = readU0G32(1000), actPos = readU0G32(1002), cmdSpd = readU0G32(1004), actSpd = readU0G32(1012), pointNo = readU0G16(1035) },
+                // Axis 4: Md.20=G1100, Md.21=G1102, Md.22=G1104, Md.28=G1112, Md.44=G1135
+                ax4 = new { cmdPos = readU0G32(1100), actPos = readU0G32(1102), cmdSpd = readU0G32(1104), actSpd = readU0G32(1112), pointNo = readU0G16(1135) }
+            };
         }
 
         private Task PushDxfStateAsync()
@@ -769,7 +1025,7 @@ namespace test1
 
         private Task PushTelemetryStateAsync()
         {
-            bool connected = plcComm != null && plcComm.IsConnected;
+            bool connected = IsAnyPlcConnected;
             var dValues = new System.Collections.Generic.List<object>();
             var buffers = new System.Collections.Generic.List<object>();
 
@@ -779,7 +1035,7 @@ namespace test1
                 {
                     try
                     {
-                        int v = plcComm.ReadDeviceValue(reg);
+                        int v = SafeReadDeviceValue(reg);
                         dValues.Add(new { register = reg, value = v, ok = true });
                     }
                     catch (Exception ex)
@@ -799,7 +1055,7 @@ namespace test1
                 {
                     try
                     {
-                        int[] arr = plcComm.ReadDeviceRange(buf.Path, buf.Length);
+                        int[] arr = SafeReadDeviceRange(buf.Path, buf.Length);
                         buffers.Add(new { path = buf.Path, values = arr, ok = true });
                     }
                     catch (Exception ex)
@@ -912,7 +1168,7 @@ namespace test1
 
         private async Task HandleWriteBufferRequestAsync(string path, int value)
         {
-            if (plcComm == null || !plcComm.IsConnected)
+            if (!IsAnyPlcConnected)
             {
                 await NotifyAsync("error", "Telemetry", "PLC is not connected.");
                 return;
@@ -922,7 +1178,7 @@ namespace test1
             {
                 // For testing, attempt to write 32-bit as two words if possible
                 string used;
-                int result = plcComm.WriteInt32ToDevicePath(path, value, out used);
+                int result = SafeWriteInt32ToDevicePath(path, value, out used);
                 AddLogEntry(path, value.ToString(CultureInfo.InvariantCulture), "Write", result == 0 ? "OK" : $"Error({result})", used);
                 if (result == 0)
                 {
@@ -966,7 +1222,7 @@ namespace test1
 
         private async Task HandleSendCadXAsync()
         {
-            if (plcComm == null || !plcComm.IsConnected)
+            if (!IsAnyPlcConnected)
             {
                 await NotifyAsync("error", "Telemetry", "PLC is not connected.");
                 return;
@@ -1042,25 +1298,25 @@ namespace test1
                     // write move code
                     string deviceMove = $"U0\\G{baseG + (n - 1) * stride + offsetMoveCode}";
                     string usedMove;
-                    int rMove = plcComm.WriteInt32ToDevicePath(deviceMove, moveCode, out usedMove);
+                    int rMove = SafeWriteInt32ToDevicePath(deviceMove, moveCode, out usedMove);
                     AddLogEntry(deviceMove, "0x" + moveCode.ToString("X4"), "Write", rMove == 0 ? "OK" : $"Error({rMove})", "MoveCode:" + usedMove);
 
                     // write M code
                     string deviceM = $"U0\\G{baseG + (n - 1) * stride + offsetMCode}";
                     string usedM;
-                    int rM = plcComm.WriteInt32ToDevicePath(deviceM, mcodeVal, out usedM);
+                    int rM = SafeWriteInt32ToDevicePath(deviceM, mcodeVal, out usedM);
                     AddLogEntry(deviceM, mcodeVal.ToString(CultureInfo.InvariantCulture), "Write", rM == 0 ? "OK" : $"Error({rM})", "MCode:" + usedM);
 
                     // write dwell
                     string deviceDwell = $"U0\\G{baseG + (n - 1) * stride + offsetDwell}";
                     string usedD;
-                    int rD = plcComm.WriteInt32ToDevicePath(deviceDwell, dwellVal, out usedD);
+                    int rD = SafeWriteInt32ToDevicePath(deviceDwell, dwellVal, out usedD);
                     AddLogEntry(deviceDwell, dwellVal.ToString(CultureInfo.InvariantCulture), "Write", rD == 0 ? "OK" : $"Error({rD})", "Dwell:" + usedD);
 
                     // write speed
                     string deviceSpeed = $"U0\\G{baseG + (n - 1) * stride + offsetSpeed}";
                     string usedS;
-                    int rS = plcComm.WriteInt32ToDevicePath(deviceSpeed, speedVal, out usedS);
+                    int rS = SafeWriteInt32ToDevicePath(deviceSpeed, speedVal, out usedS);
                     AddLogEntry(deviceSpeed, speedVal.ToString(CultureInfo.InvariantCulture), "Write", rS == 0 ? "OK" : $"Error({rS})", "Speed:" + usedS);
 
                     // write position X
@@ -1068,7 +1324,7 @@ namespace test1
                     {
                         string devicePosX = $"U0\\G{baseG + (n - 1) * stride + offsetPosX}";
                         string usedX;
-                        int rX = plcComm.WriteInt32ToDevicePath(devicePosX, endX, out usedX);
+                        int rX = SafeWriteInt32ToDevicePath(devicePosX, endX, out usedX);
                         AddLogEntry(devicePosX, endX.ToString(CultureInfo.InvariantCulture), "Write", rX == 0 ? "OK" : $"Error({rX})", usedX);
                         if (rX != 0) await NotifyAsync("error", "Telemetry", $"Ghi End X thất bại {devicePosX}: {rX}");
                     }
@@ -1078,7 +1334,7 @@ namespace test1
                     {
                         string deviceCenterX = $"U0\\G{baseG + (n - 1) * stride + offsetCenterX}";
                         string usedCx;
-                        int rCx = plcComm.WriteInt32ToDevicePath(deviceCenterX, centerX, out usedCx);
+                        int rCx = SafeWriteInt32ToDevicePath(deviceCenterX, centerX, out usedCx);
                         AddLogEntry(deviceCenterX, centerX.ToString(CultureInfo.InvariantCulture), "Write", rCx == 0 ? "OK" : $"Error({rCx})", usedCx);
                         if (rCx != 0) await NotifyAsync("error", "Telemetry", $"Ghi Center X thất bại {deviceCenterX}: {rCx}");
                     }
@@ -1329,7 +1585,17 @@ namespace test1
             }
 
             string json = serializer.Serialize(new { type, payload });
-            await webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+            
+            if (webView.InvokeRequired)
+            {
+                webView.Invoke(new Action(() => {
+                    _ = webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+                }));
+            }
+            else
+            {
+                await webView.CoreWebView2.ExecuteScriptAsync("window.app && window.app.receive(" + json + ");");
+            }
         }
 
         private static Dictionary<string, object> GetMap(Dictionary<string, object> source, string key)
@@ -1390,11 +1656,17 @@ namespace test1
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            plcPollTimer.Stop();
+            mitsuCts?.Cancel();
+            s7Cts?.Cancel();
             if (plcComm != null)
             {
                 plcComm.Dispose();
                 plcComm = null;
+            }
+            if (s7Comm != null)
+            {
+                s7Comm.Dispose();
+                s7Comm = null;
             }
 
             base.OnFormClosing(e);
@@ -1437,3 +1709,4 @@ namespace test1
 
     }
 }
+

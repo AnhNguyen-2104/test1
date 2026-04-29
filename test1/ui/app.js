@@ -20,7 +20,8 @@ const state = {
     assignedPointKeys: {},
     processRows: []
   },
-  telemetry: {}
+  telemetry: {},
+  events: []  // System event log entries
 };
 
 
@@ -47,6 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyTheme(state.theme);
   applyView(state.view);
   post("uiReady");
+  checkLoginState();
 });
 
 function cacheDom() {
@@ -56,9 +58,13 @@ function cacheDom() {
   dom.placeholderButtons = Array.from(document.querySelectorAll("[data-placeholder]"));
   dom.themeToggle = document.getElementById("theme-toggle");
   dom.connectButton = document.getElementById("connect-button");
-  dom.plcIp = document.getElementById("plc-ip");
-  dom.plcPort = document.getElementById("plc-port");
+  dom.connectS7Button = document.getElementById("connect-s7-button");
+  dom.plcStation = document.getElementById("plc-station");
   dom.connectionBanner = document.getElementById("connection-banner");
+  dom.mitsuDot = document.getElementById("mitsu-status-dot");
+  dom.mitsuText = document.getElementById("mitsu-status-text");
+  dom.s7Dot = document.getElementById("s7-status-dot");
+  dom.s7Text = document.getElementById("s7-status-text");
   dom.connectionMeta = document.getElementById("connection-meta");
   dom.sidebarStatus = document.getElementById("sidebar-status");
   dom.velocitySlider = document.getElementById("velocity-slider");
@@ -93,15 +99,51 @@ function cacheDom() {
   dom.logsBody = document.getElementById("logs-table-body");
   dom.logsEmpty = document.getElementById("logs-empty");
   dom.clearLogsButton = document.getElementById("clear-logs-button");
+  dom.eventsList = document.getElementById("events-list");
+  dom.clearEventsButton = document.getElementById("clear-events-button");
   dom.modal = document.getElementById("prompt-modal");
   dom.modalTitle = document.getElementById("modal-title");
   dom.modalLabel = document.getElementById("modal-label");
   dom.modalInput = document.getElementById("modal-input");
   dom.modalConfirm = document.getElementById("modal-confirm");
   dom.modalCancel = document.getElementById("modal-cancel");
+
+  // Login DOM
+  dom.loginOverlay = document.getElementById("login-overlay");
+  dom.loginUsername = document.getElementById("login-username");
+  dom.loginPassword = document.getElementById("login-password");
+  dom.loginConfirm = document.getElementById("login-confirm-button");
+  dom.loginError = document.getElementById("login-error");
+  dom.logoutButton = document.getElementById("logout-button");
+
+  // Removed elements (null checks needed)
+  dom.velocitySlider = document.getElementById("velocity-slider");
+  dom.velocityValue = document.getElementById("velocity-value");
+  dom.velocityRaw = document.getElementById("velocity-raw");
+  dom.velocitySubtitle = document.getElementById("velocity-subtitle");
+  dom.integrityState = document.getElementById("integrity-state");
+  dom.integrityDetail = document.getElementById("integrity-detail");
+  dom.connectionBanner = document.getElementById("connection-banner");
 }
 
 function bindEvents() {
+  // Login events
+  if (dom.loginConfirm) {
+    dom.loginConfirm.addEventListener("click", handleLogin);
+  }
+  if (dom.loginPassword) {
+    dom.loginPassword.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") handleLogin();
+    });
+  }
+  if (dom.logoutButton) {
+    dom.logoutButton.addEventListener("click", () => {
+      dom.loginOverlay.style.display = "flex";
+      dom.loginPassword.value = "";
+      localStorage.removeItem("isLoggedIn");
+    });
+  }
+
   dom.topViewButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const view = button.dataset.view;
@@ -132,24 +174,42 @@ function bindEvents() {
     post("setTheme", { theme: state.theme });
   });
 
-  dom.connectButton.addEventListener("click", () => {
-    post("connectToggle", {
-      ip: dom.plcIp.value.trim(),
-      port: parseInt(dom.plcPort.value, 10) || 0
+  if (dom.connectButton) {
+    dom.connectButton.addEventListener("click", () => {
+      showToast("info", "Mitsubishi", "Đang kết nối...");
+      post("connectMitsu", {
+        station: parseInt(dom.plcStation.value, 10) || 0
+      });
     });
-  });
+  }
 
-  dom.velocitySlider.addEventListener("input", () => {
-    const rawValue = parseInt(dom.velocitySlider.value, 10) || 0;
-    dom.velocityValue.textContent = (rawValue / 10).toFixed(1);
-    dom.velocityRaw.textContent = `Raw: ${rawValue} (${state.control.velocity.register || "D406"})`;
-  });
-
-  dom.velocitySlider.addEventListener("change", () => {
-    post("setVelocity", {
-      value: parseInt(dom.velocitySlider.value, 10) || 0
+  if (dom.connectS7Button) {
+    dom.connectS7Button.addEventListener("click", () => {
+      showToast("info", "S7-1200", "Đang kết nối...");
+      const s7IpEl = document.getElementById('s7-ip');
+      const s7RackEl = document.getElementById('s7-rack');
+      const s7SlotEl = document.getElementById('s7-slot');
+      post("connectS7", {
+        s7Ip: s7IpEl ? s7IpEl.value.trim() : "192.168.0.1",
+        s7Rack: s7RackEl ? (parseInt(s7RackEl.value, 10) || 0) : 0,
+        s7Slot: s7SlotEl ? (parseInt(s7SlotEl.value, 10) || 1) : 1
+      });
     });
-  });
+  }
+
+  if (dom.velocitySlider) {
+    dom.velocitySlider.addEventListener("input", () => {
+      const rawValue = parseInt(dom.velocitySlider.value, 10) || 0;
+      if (dom.velocityValue) dom.velocityValue.textContent = (rawValue / 10).toFixed(1);
+      if (dom.velocityRaw) dom.velocityRaw.textContent = `Raw: ${rawValue} (${state.control.velocity.register || "D406"})`;
+    });
+
+    dom.velocitySlider.addEventListener("change", () => {
+      post("setVelocity", {
+        value: parseInt(dom.velocitySlider.value, 10) || 0
+      });
+    });
+  }
 
   dom.addRegister.addEventListener("click", () => {
     openPrompt("Add register", "Enter a PLC register to monitor:", "", (value) => {
@@ -408,22 +468,99 @@ function handleHostMessage(message) {
       renderLogs();
       break;
 
-    case "notify":
-      showToast(message.payload.kind, message.payload.title, message.payload.message);
+    case "notify": {
+      const p = message.payload;
+      showToast(p.kind, p.title, p.message);
+      // Push important events to System Events list
+      const isImportant = p.kind === "error" || p.title === "DXF" || p.title === "S7-1200" || p.title === "Mitsubishi" || p.title === "Jog" || p.kind === "success";
+      if (isImportant) {
+        pushSystemEvent(p.kind, p.title, p.message);
+      }
       break;
+    }
   }
 }
+
+function handleLogin() {
+  const user = dom.loginUsername.value;
+  const pass = dom.loginPassword.value;
+  if (user === "admin" && pass === "123") {
+    dom.loginOverlay.style.display = "none";
+    localStorage.setItem("isLoggedIn", "true");
+    pushSystemEvent("success", "Security", "Administrator logged in successfully.");
+  } else {
+    dom.loginError.style.display = "block";
+    setTimeout(() => { dom.loginError.style.display = "none"; }, 3000);
+  }
+}
+
+function checkLoginState() {
+  if (localStorage.getItem("isLoggedIn") === "true") {
+    dom.loginOverlay.style.display = "none";
+  }
+}
+
+
+function pushSystemEvent(kind, title, message) {
+  const now = new Date();
+  const time = now.toTimeString().slice(0, 8);
+  state.events.unshift({ time, kind, title, message });
+  if (state.events.length > 100) state.events.pop();
+  renderEvents();
+}
+
+function renderEvents() {
+  if (!dom.eventsList) return;
+  if (state.events.length === 0) {
+    dom.eventsList.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px 0;">No events yet.</div>';
+    return;
+  }
+  const colorMap = { error: "#ef4444", success: "#22c55e", info: "#60a5fa", warning: "#f59e0b" };
+  dom.eventsList.innerHTML = state.events.map(ev => {
+    const color = colorMap[ev.kind] || "#94a3b8";
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 10px;border-radius:6px;background:var(--panel-2);border-left:3px solid ${color};">
+      <span style="color:var(--text-muted);font-size:10px;white-space:nowrap;margin-top:2px;">${ev.time}</span>
+      <span style="font-size:11px;font-weight:700;color:${color};white-space:nowrap;">[${ev.title}]</span>
+      <span style="font-size:12px;color:var(--text);flex:1;">${escapeHtml(ev.message)}</span>
+    </div>`;
+  }).join("");
+}
+
 
 function renderControl() {
   const connection = state.control.connection || {};
   syncInputValue(dom.plcIp, connection.ip || "");
   syncInputValue(dom.plcPort, connection.port != null ? String(connection.port) : "");
-  dom.connectButton.textContent = connection.buttonText || "CONNECT SYSTEM";
-  dom.connectionBanner.textContent = (connection.banner || "PLC disconnected").toUpperCase();
-  dom.connectionBanner.classList.toggle("connected", !!connection.connected);
-  dom.connectionBanner.classList.toggle("disconnected", !connection.connected);
-  dom.connectionMeta.textContent = connection.meta || "";
-  dom.sidebarStatus.textContent = connection.banner || "PLC disconnected";
+  dom.connectButton.textContent = connection.buttonText || "CONNECT PLC_Q";
+
+  // Update dual status dots
+  const banner = connection.banner || "";
+  const mitsuOk = banner.includes("Mitsu: OK");
+  const s7Ok = banner.includes("S7: OK");
+
+  if (dom.mitsuDot) {
+    dom.mitsuDot.style.background = mitsuOk ? "#22c55e" : "#ef4444";
+    dom.mitsuDot.title = mitsuOk ? "Connected" : "Disconnected";
+  }
+  if (dom.mitsuText) {
+    dom.mitsuText.textContent = mitsuOk ? "OK" : "DC";
+    dom.mitsuText.style.color = mitsuOk ? "#22c55e" : "#ef4444";
+  }
+  if (dom.s7Dot) {
+    dom.s7Dot.style.background = s7Ok ? "#22c55e" : "#ef4444";
+    dom.s7Dot.title = s7Ok ? "Connected" : "Disconnected";
+  }
+  if (dom.s7Text) {
+    dom.s7Text.textContent = s7Ok ? "OK" : "DC";
+    dom.s7Text.style.color = s7Ok ? "#22c55e" : "#ef4444";
+  }
+
+  if (dom.connectionBanner) {
+    dom.connectionBanner.textContent = (banner || "PLC disconnected").toUpperCase();
+    dom.connectionBanner.classList.toggle("connected", !!connection.connected);
+    dom.connectionBanner.classList.toggle("disconnected", !connection.connected);
+  }
+  dom.sidebarStatus.textContent = connection.banner || "Mitsu: DC | S7: DC";
 
   (state.control.coordinates || []).forEach((coordinate) => {
     const key = coordinate.key;
@@ -431,21 +568,71 @@ function renderControl() {
     setText(`coord-${key}-raw`, `Raw: ${coordinate.raw || 0} (${coordinate.register || ""})`);
   });
 
-  const velocity = state.control.velocity || {};
-  dom.velocitySlider.min = velocity.min != null ? velocity.min : 0;
-  dom.velocitySlider.max = velocity.max != null ? velocity.max : 50;
-  dom.velocitySlider.value = velocity.value != null ? velocity.value : 0;
-  dom.velocityValue.textContent = velocity.display || "0.0";
-  dom.velocityRaw.textContent = `Raw: ${velocity.value || 0} (${velocity.register || "D406"})`;
-  dom.velocitySubtitle.textContent = `Target write velocity (${velocity.register || "D406"})`;
+  if (dom.velocitySlider) {
+    const velocity = state.control.velocity || {};
+    dom.velocitySlider.min = velocity.min != null ? velocity.min : 0;
+    dom.velocitySlider.max = velocity.max != null ? velocity.max : 50;
+    dom.velocitySlider.value = velocity.value != null ? velocity.value : 0;
+    if (dom.velocityValue) dom.velocityValue.textContent = velocity.display || "0.0";
+    if (dom.velocityRaw) dom.velocityRaw.textContent = `Raw: ${velocity.value || 0} (${velocity.register || "D406"})`;
+    if (dom.velocitySubtitle) dom.velocitySubtitle.textContent = `Target write velocity (${velocity.register || "D406"})`;
+  }
 
-  const integrity = state.control.integrity || {};
-  dom.integrityState.textContent = integrity.state || "IDLE";
-  dom.integrityState.className = `integrity-state ${integrity.tone || "idle"}`;
-  dom.integrityDetail.textContent = integrity.detail || "STOP";
+  if (dom.integrityState) {
+    const integrity = state.control.integrity || {};
+    dom.integrityState.textContent = integrity.state || "IDLE";
+    dom.integrityState.className = `integrity-state ${integrity.tone || "idle"}`;
+    if (dom.integrityDetail) dom.integrityDetail.textContent = integrity.detail || "STOP";
+  }
 
   renderMonitorTable();
+  renderAxisMonitor();
   updateNavState();
+}
+
+let lastPointNos = { ax1: 0, ax2: 0, ax3: 0, ax4: 0 };
+
+function renderAxisMonitor() {
+  const am = state.control.axisMonitor;
+  if (!am) return;
+
+  const fmt = (v) => (v !== undefined && v !== null) ? v.toLocaleString() : "--";
+  const fmtPos = (v) => (v !== undefined && v !== null) ? (v / 10).toFixed(1) + " μm" : "--";
+
+  const axes = [
+    { key: "ax1", data: am.ax1 },
+    { key: "ax2", data: am.ax2 },
+    { key: "ax3", data: am.ax3 },
+    { key: "ax4", data: am.ax4 }
+  ];
+
+  axes.forEach(({ key, data }) => {
+    if (!data) return;
+    const set = (id, val, formatter = fmt) => { 
+      const el = document.getElementById(id); 
+      if (el) el.textContent = formatter(val); 
+    };
+    
+    set(`${key}-cmd-pos`, data.cmdPos, fmtPos);
+    set(`${key}-act-pos`, data.actPos, fmtPos);
+    set(`${key}-cmd-spd`, data.cmdSpd);
+    set(`${key}-act-spd`, data.actSpd);
+    
+    // Positioning Point No. (Md.44)
+    const pNo = data.pointNo || 0;
+    set(`${key}-point-no`, pNo === 0 ? "IDLE / JOG" : pNo);
+
+    // Log event when point changes (and is not idle)
+    if (pNo !== lastPointNos[key]) {
+      if (pNo > 0 && pNo <= 600) {
+        pushSystemEvent("info", `Axis ${key.slice(2)}`, `Executing Positioning Point #${pNo}`);
+      } else if (pNo >= 9001) {
+        const special = pNo === 9001 || pNo === 9002 ? "OPR (Home)" : "Current Value Change";
+        pushSystemEvent("warning", `Axis ${key.slice(2)}`, `Operation: ${special} (${pNo})`);
+      }
+      lastPointNos[key] = pNo;
+    }
+  });
 }
 
 function renderMonitorTable() {
