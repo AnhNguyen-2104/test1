@@ -20,7 +20,8 @@ const state = {
     assignedPointKeys: {},
     processRows: []
   },
-  telemetry: {}
+  telemetry: {},
+  events: []  // System event log entries
 };
 
 
@@ -47,6 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyTheme(state.theme);
   applyView(state.view);
   post("uiReady");
+  checkLoginState();
 });
 
 function cacheDom() {
@@ -98,15 +100,42 @@ function cacheDom() {
   dom.logsBody = document.getElementById("logs-table-body");
   dom.logsEmpty = document.getElementById("logs-empty");
   dom.clearLogsButton = document.getElementById("clear-logs-button");
+  dom.eventsList = document.getElementById("events-list");
+  dom.clearEventsButton = document.getElementById("clear-events-button");
   dom.modal = document.getElementById("prompt-modal");
   dom.modalTitle = document.getElementById("modal-title");
   dom.modalLabel = document.getElementById("modal-label");
   dom.modalInput = document.getElementById("modal-input");
   dom.modalConfirm = document.getElementById("modal-confirm");
   dom.modalCancel = document.getElementById("modal-cancel");
+
+  // Login DOM
+  dom.loginOverlay = document.getElementById("login-overlay");
+  dom.loginUsername = document.getElementById("login-username");
+  dom.loginPassword = document.getElementById("login-password");
+  dom.loginConfirm = document.getElementById("login-confirm-button");
+  dom.loginError = document.getElementById("login-error");
+  dom.logoutButton = document.getElementById("logout-button");
 }
 
 function bindEvents() {
+  // Login events
+  if (dom.loginConfirm) {
+    dom.loginConfirm.addEventListener("click", handleLogin);
+  }
+  if (dom.loginPassword) {
+    dom.loginPassword.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") handleLogin();
+    });
+  }
+  if (dom.logoutButton) {
+    dom.logoutButton.addEventListener("click", () => {
+      dom.loginOverlay.style.display = "flex";
+      dom.loginPassword.value = "";
+      localStorage.removeItem("isLoggedIn");
+    });
+  }
+
   dom.topViewButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const view = button.dataset.view;
@@ -426,11 +455,64 @@ function handleHostMessage(message) {
       renderLogs();
       break;
 
-    case "notify":
-      showToast(message.payload.kind, message.payload.title, message.payload.message);
+    case "notify": {
+      const p = message.payload;
+      showToast(p.kind, p.title, p.message);
+      // Push important events to System Events list
+      const isImportant = p.kind === "error" || p.title === "DXF" || p.title === "S7-1200" || p.title === "Mitsubishi" || p.title === "Jog" || p.kind === "success";
+      if (isImportant) {
+        pushSystemEvent(p.kind, p.title, p.message);
+      }
       break;
+    }
   }
 }
+
+function handleLogin() {
+  const user = dom.loginUsername.value;
+  const pass = dom.loginPassword.value;
+  if (user === "admin" && pass === "123") {
+    dom.loginOverlay.style.display = "none";
+    localStorage.setItem("isLoggedIn", "true");
+    pushSystemEvent("success", "Security", "Administrator logged in successfully.");
+  } else {
+    dom.loginError.style.display = "block";
+    setTimeout(() => { dom.loginError.style.display = "none"; }, 3000);
+  }
+}
+
+function checkLoginState() {
+  if (localStorage.getItem("isLoggedIn") === "true") {
+    dom.loginOverlay.style.display = "none";
+  }
+}
+
+
+function pushSystemEvent(kind, title, message) {
+  const now = new Date();
+  const time = now.toTimeString().slice(0, 8);
+  state.events.unshift({ time, kind, title, message });
+  if (state.events.length > 100) state.events.pop();
+  renderEvents();
+}
+
+function renderEvents() {
+  if (!dom.eventsList) return;
+  if (state.events.length === 0) {
+    dom.eventsList.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px 0;">No events yet.</div>';
+    return;
+  }
+  const colorMap = { error: "#ef4444", success: "#22c55e", info: "#60a5fa", warning: "#f59e0b" };
+  dom.eventsList.innerHTML = state.events.map(ev => {
+    const color = colorMap[ev.kind] || "#94a3b8";
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 10px;border-radius:6px;background:var(--panel-2);border-left:3px solid ${color};">
+      <span style="color:var(--text-muted);font-size:10px;white-space:nowrap;margin-top:2px;">${ev.time}</span>
+      <span style="font-size:11px;font-weight:700;color:${color};white-space:nowrap;">[${ev.title}]</span>
+      <span style="font-size:12px;color:var(--text);flex:1;">${escapeHtml(ev.message)}</span>
+    </div>`;
+  }).join("");
+}
+
 
 function renderControl() {
   const connection = state.control.connection || {};
@@ -487,7 +569,53 @@ function renderControl() {
   dom.integrityDetail.textContent = integrity.detail || "STOP";
 
   renderMonitorTable();
+  renderAxisMonitor();
   updateNavState();
+}
+
+let lastPointNos = { ax1: 0, ax2: 0, ax3: 0, ax4: 0 };
+
+function renderAxisMonitor() {
+  const am = state.control.axisMonitor;
+  if (!am) return;
+
+  const fmt = (v) => (v !== undefined && v !== null) ? v.toLocaleString() : "--";
+  const fmtPos = (v) => (v !== undefined && v !== null) ? (v / 10).toFixed(1) + " μm" : "--";
+
+  const axes = [
+    { key: "ax1", data: am.ax1 },
+    { key: "ax2", data: am.ax2 },
+    { key: "ax3", data: am.ax3 },
+    { key: "ax4", data: am.ax4 }
+  ];
+
+  axes.forEach(({ key, data }) => {
+    if (!data) return;
+    const set = (id, val, formatter = fmt) => { 
+      const el = document.getElementById(id); 
+      if (el) el.textContent = formatter(val); 
+    };
+    
+    set(`${key}-cmd-pos`, data.cmdPos, fmtPos);
+    set(`${key}-act-pos`, data.actPos, fmtPos);
+    set(`${key}-cmd-spd`, data.cmdSpd);
+    set(`${key}-act-spd`, data.actSpd);
+    
+    // Positioning Point No. (Md.44)
+    const pNo = data.pointNo || 0;
+    set(`${key}-point-no`, pNo === 0 ? "IDLE / JOG" : pNo);
+
+    // Log event when point changes (and is not idle)
+    if (pNo !== lastPointNos[key]) {
+      if (pNo > 0 && pNo <= 600) {
+        pushSystemEvent("info", `Axis ${key.slice(2)}`, `Executing Positioning Point #${pNo}`);
+      } else if (pNo >= 9001) {
+        const special = pNo === 9001 || pNo === 9002 ? "OPR (Home)" : "Current Value Change";
+        pushSystemEvent("warning", `Axis ${key.slice(2)}`, `Operation: ${special} (${pNo})`);
+      }
+      lastPointNos[key] = pNo;
+    }
+  });
 }
 
 function renderMonitorTable() {

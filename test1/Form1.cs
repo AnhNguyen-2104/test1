@@ -842,10 +842,50 @@ namespace test1
                     register = row.Register,
                     value = row.Value,
                     status = row.Status
-                }).ToList()
+                }).ToList(),
+                axisMonitor = BuildAxisMonitorData()
             };
 
             return PostToUiAsync("controlState", payload);
+        }
+
+        private object BuildAxisMonitorData()
+        {
+            // Đọc 32-bit từ U0\GX (2 words: Low=G, High=G+1)
+            Func<int, long> readU0G32 = (g) =>
+            {
+                try
+                {
+                    if (plcComm == null || !plcComm.IsConnected) return 0;
+                    int[] r = plcComm.ReadBuffer(0, g, 2); // U0\G{g} and U0\G{g+1}
+                    return (long)((uint)r[0] | ((uint)r[1] << 16));
+                }
+                catch { return 0; }
+            };
+
+            // Đọc 16-bit từ U0\GX (1 word) cho Md.44
+            Func<int, int> readU0G16 = (g) =>
+            {
+                try
+                {
+                    if (plcComm == null || !plcComm.IsConnected) return 0;
+                    int[] r = plcComm.ReadBuffer(0, g, 1);
+                    return r[0];
+                }
+                catch { return 0; }
+            };
+
+            return new
+            {
+                // Axis 1: Md.20=G800, Md.21=G802, Md.22=G804, Md.28=G812, Md.44=G835
+                ax1 = new { cmdPos = readU0G32(800), actPos = readU0G32(802), cmdSpd = readU0G32(804), actSpd = readU0G32(812), pointNo = readU0G16(835) },
+                // Axis 2: Md.20=G900, Md.21=G902, Md.22=G904, Md.28=G912, Md.44=G935
+                ax2 = new { cmdPos = readU0G32(900), actPos = readU0G32(902), cmdSpd = readU0G32(904), actSpd = readU0G32(912), pointNo = readU0G16(935) },
+                // Axis 3: Md.20=G1000, Md.21=G1002, Md.22=G1004, Md.28=G1012, Md.44=G1035
+                ax3 = new { cmdPos = readU0G32(1000), actPos = readU0G32(1002), cmdSpd = readU0G32(1004), actSpd = readU0G32(1012), pointNo = readU0G16(1035) },
+                // Axis 4: Md.20=G1100, Md.21=G1102, Md.22=G1104, Md.28=G1112, Md.44=G1135
+                ax4 = new { cmdPos = readU0G32(1100), actPos = readU0G32(1102), cmdSpd = readU0G32(1104), actSpd = readU0G32(1112), pointNo = readU0G16(1135) }
+            };
         }
 
         private Task PushDxfStateAsync()

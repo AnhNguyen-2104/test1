@@ -9,6 +9,25 @@
 </head>
 
 <body>
+  <div id="login-overlay" class="login-overlay">
+    <div class="login-card">
+      <div class="login-brand">PRECISION SCADA</div>
+      <div class="login-title">Administrator Login</div>
+      <div class="login-fields">
+        <div class="field-group">
+          <label class="field-label">Username</label>
+          <input id="login-username" class="text-input" type="text" placeholder="admin" autofocus>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Password</label>
+          <input id="login-password" class="text-input" type="password" placeholder="123">
+        </div>
+        <button id="login-confirm-button" class="primary-button full-width" style="margin-top: 10px;">SIGN IN</button>
+      </div>
+      <div id="login-error" class="login-error" style="display: none;">Invalid username or password</div>
+    </div>
+  </div>
+
   <div class="app-shell">
     <header class="topbar">
       <div class="brand-block">
@@ -49,7 +68,7 @@
       <div class="sidebar-footer">
         <button id="emergency-stop" class="danger-button full-width">EMERGENCY STOP</button>
         <button class="side-footer-link" data-placeholder="SUPPORT">SUPPORT</button>
-        <button class="side-footer-link" data-placeholder="LOGOUT">LOGOUT</button>
+        <button id="logout-button" class="side-footer-link">LOGOUT</button>
       </div>
     </aside>
 
@@ -101,67 +120,13 @@
             </div>
           </div>
 
-          <div id="coord-x" class="panel metric-card accent-blue">
-            <div class="metric-title">COORDINATE X</div>
-            <div class="metric-row">
-              <div class="metric-value" id="coord-x-value">0.00</div>
-              <div class="metric-unit">um</div>
-            </div>
-            <div class="metric-raw" id="coord-x-raw">Raw: 0 (D2000)</div>
-          </div>
 
-          <div id="coord-y" class="panel metric-card accent-green">
-            <div class="metric-title">COORDINATE Y</div>
-            <div class="metric-row">
-              <div class="metric-value" id="coord-y-value">0.00</div>
-              <div class="metric-unit">um</div>
-            </div>
-            <div class="metric-raw" id="coord-y-raw">Raw: 0 (D2002)</div>
-          </div>
-
-          <div id="coord-z" class="panel metric-card accent-orange">
-            <div class="metric-title">COORDINATE Z</div>
-            <div class="metric-row">
-              <div class="metric-value" id="coord-z-value">0.00</div>
-              <div class="metric-unit">um</div>
-            </div>
-            <div class="metric-raw" id="coord-z-raw">Raw: 0 (D2004)</div>
-          </div>
-
-          <div class="panel panel-velocity">
-            <div class="panel-header">
-              <div>
-                <div class="panel-title">Process Velocity</div>
-                <div class="panel-subtitle" id="velocity-subtitle">Target write velocity (D406)</div>
-              </div>
-            </div>
-            <div class="velocity-layout">
-              <div class="velocity-readout">
-                <div id="velocity-value" class="velocity-value">1.5</div>
-                <div class="velocity-unit">m/s</div>
-              </div>
-              <div class="slider-block">
-                <input id="velocity-slider" class="velocity-slider" type="range" min="0" max="50" value="15">
-                <div class="slider-scale">
-                  <span>0.0</span>
-                  <span id="velocity-raw">Raw: 15 (D406)</span>
-                  <span>5.0</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="panel panel-integrity">
-            <div class="panel-title center">System Integrity</div>
-            <div id="integrity-state" class="integrity-state idle">IDLE</div>
-            <div id="integrity-detail" class="integrity-detail">STOP</div>
-          </div>
 
           <div class="panel panel-jog">
             <div class="panel-header">
               <div>
-                <div class="panel-title">Manual Kinematic Jog</div>
-                <div class="panel-subtitle">Direct M-register pulse control</div>
+                <div class="panel-title">Manual Jog</div>
+                <div class="panel-subtitle">M-register pulse control</div>
               </div>
             </div>
             <div class="jog-layout">
@@ -177,35 +142,69 @@
                 <button class="jog-button z" data-jog-offset="5" title="Z- (M3005)">Z-</button>
               </div>
             </div>
-            <div class="jog-base">X+:M3000 | X-:M3001 | Y+:M3002 | Y-:M3003 | Z+:M3004 | Z-:M3005</div>
+            <div class="jog-base">X+:M3000 · X-:M3001 · Y+:M3002 · Y-:M3003 · Z+:M3004 · Z-:M3005</div>
           </div>
 
           <div class="panel panel-stream">
-            <div class="panel-header stream-header">
+            <div class="panel-header">
               <div>
-                <div class="panel-title">Real-Time Data Stream</div>
-                <div class="panel-subtitle">Live PLC register monitoring</div>
+                <div class="panel-title">Axis Monitor</div>
+                <div class="panel-subtitle">Md.20 Command Position · Md.21 Actual Position · Md.22 Command Speed · Md.28 Actual Speed</div>
               </div>
-              <button id="add-register" class="text-button">+ ADD REGISTER</button>
             </div>
-            <div class="table-frame">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Register</th>
-                    <th>Value</th>
-                    <th>Status</th>
-                    <th class="action-col"></th>
-                  </tr>
-                </thead>
-                <tbody id="monitor-table-body"></tbody>
-              </table>
-              <div id="monitor-empty" class="empty-state">No registers being monitored. Use ADD REGISTER to start live
-                data flow.</div>
+            <div class="axis-monitor-grid">
+              <div class="axis-col">
+                <div class="axis-col-title">Axis 1</div>
+                <div class="axis-row"><span class="axis-label">Command Position (Md.20)</span><span class="axis-val" id="ax1-cmd-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Position (Md.21)</span><span class="axis-val" id="ax1-act-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Command Speed (Md.22)</span><span class="axis-val" id="ax1-cmd-spd">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Speed (Md.28)</span><span class="axis-val" id="ax1-act-spd">--</span></div>
+                <div class="axis-row" style="background: var(--brand-transparent); border-radius: 4px; padding: 6px; border-bottom: none;"><span class="axis-label" style="color: var(--brand);">Running Point (Md.44)</span><span class="axis-val" id="ax1-point-no" style="color: var(--brand);">--</span></div>
+              </div>
+              <div class="axis-col">
+                <div class="axis-col-title">Axis 2</div>
+                <div class="axis-row"><span class="axis-label">Command Position (Md.20)</span><span class="axis-val" id="ax2-cmd-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Position (Md.21)</span><span class="axis-val" id="ax2-act-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Command Speed (Md.22)</span><span class="axis-val" id="ax2-cmd-spd">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Speed (Md.28)</span><span class="axis-val" id="ax2-act-spd">--</span></div>
+                <div class="axis-row" style="background: var(--brand-transparent); border-radius: 4px; padding: 6px; border-bottom: none;"><span class="axis-label" style="color: var(--brand);">Running Point (Md.44)</span><span class="axis-val" id="ax2-point-no" style="color: var(--brand);">--</span></div>
+              </div>
+              <div class="axis-col">
+                <div class="axis-col-title">Axis 3</div>
+                <div class="axis-row"><span class="axis-label">Command Position (Md.20)</span><span class="axis-val" id="ax3-cmd-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Position (Md.21)</span><span class="axis-val" id="ax3-act-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Command Speed (Md.22)</span><span class="axis-val" id="ax3-cmd-spd">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Speed (Md.28)</span><span class="axis-val" id="ax3-act-spd">--</span></div>
+                <div class="axis-row" style="background: var(--brand-transparent); border-radius: 4px; padding: 6px; border-bottom: none;"><span class="axis-label" style="color: var(--brand);">Running Point (Md.44)</span><span class="axis-val" id="ax3-point-no" style="color: var(--brand);">--</span></div>
+              </div>
+              <div class="axis-col">
+                <div class="axis-col-title">Axis 4</div>
+                <div class="axis-row"><span class="axis-label">Command Position (Md.20)</span><span class="axis-val" id="ax4-cmd-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Position (Md.21)</span><span class="axis-val" id="ax4-act-pos">--</span></div>
+                <div class="axis-row"><span class="axis-label">Command Speed (Md.22)</span><span class="axis-val" id="ax4-cmd-spd">--</span></div>
+                <div class="axis-row"><span class="axis-label">Actual Speed (Md.28)</span><span class="axis-val" id="ax4-act-spd">--</span></div>
+                <div class="axis-row" style="background: var(--brand-transparent); border-radius: 4px; padding: 6px; border-bottom: none;"><span class="axis-label" style="color: var(--brand);">Running Point (Md.44)</span><span class="axis-val" id="ax4-point-no" style="color: var(--brand);">--</span></div>
+              </div>
+            </div>
+
+            <!-- System Events Log bên dưới -->
+            <div style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; color:var(--text);">System Events</div>
+                  <div style="font-size:11px; color:var(--text-muted);">DXF run progress · Errors · Connection events</div>
+                </div>
+                <button id="clear-events-button" class="text-button">Clear</button>
+              </div>
+              <div id="events-list" style="max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:4px;">
+                <div style="text-align:center; color:var(--text-muted); font-size:12px; padding:20px 0;">No events yet.</div>
+              </div>
             </div>
           </div>
+
         </div>
       </section>
+
 
       <section id="view-logs" class="view">
         <div class="panel">

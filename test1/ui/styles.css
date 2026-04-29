@@ -18,8 +18,75 @@
   --radius-lg: 8px;
   --radius-md: 6px;
   --radius-sm: 4px;
+  --brand-transparent: rgba(59, 130, 246, 0.12);
   --font: "Segoe UI", Arial, sans-serif;
 }
+
+/* Login Overlay */
+.login-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(20px);
+}
+
+.login-card {
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 40px;
+  width: 400px;
+  box-shadow: var(--card-shadow);
+  text-align: center;
+}
+
+.login-brand {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--brand);
+  letter-spacing: 0.1em;
+  margin-bottom: 30px;
+}
+
+.login-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+
+.login-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: left;
+}
+
+.login-error {
+  color: var(--red);
+  font-size: 13px;
+  margin-top: 16px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 
 
 html.theme-light {
@@ -261,11 +328,11 @@ html.theme-light .sidebar {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 460px repeat(3, minmax(220px, 1fr));
+  grid-template-columns: 380px 1fr;
+  grid-template-rows: auto auto;
   grid-template-areas:
-    "connect coordx coordy coordz"
-    "connect velocity velocity integrity"
-    "jog stream stream stream";
+    "connect axismon"
+    "jog     axismon";
   gap: 20px;
 }
 
@@ -302,8 +369,67 @@ html.theme-light .sidebar {
 }
 
 .panel-stream {
-  grid-area: stream;
+  grid-area: axismon;
+  align-self: stretch;
 }
+
+.panel-axis-monitor {
+  grid-area: axismon;
+}
+
+.axis-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.axis-col {
+  background: var(--panel-2);
+  border-radius: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+}
+
+.axis-col-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--brand);
+  margin-bottom: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.axis-row {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 3px;
+}
+
+.axis-row:last-child {
+  border-bottom: none;
+}
+
+.axis-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.axis-val {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: monospace;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.axis-val.ok { color: #22c55e; }
+.axis-val.warn { color: #f59e0b; }
 
 .panel-header {
   display: flex;
