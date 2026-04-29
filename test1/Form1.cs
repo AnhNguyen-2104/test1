@@ -773,13 +773,13 @@ namespace test1
             var dValues = new System.Collections.Generic.List<object>();
             var buffers = new System.Collections.Generic.List<object>();
 
-            if (connected)
+            foreach (var reg in telemetryRegisters)
             {
-                foreach (var reg in telemetryRegisters)
+                if (connected)
                 {
                     try
                     {
-                        int v = plcComm.ReadDeviceValue(reg);
+                        int v = ReadDeviceValue(reg);
                         dValues.Add(new { register = reg, value = v, ok = true });
                     }
                     catch (Exception ex)
@@ -787,8 +787,15 @@ namespace test1
                         dValues.Add(new { register = reg, value = (int?)null, ok = false, error = ex.Message });
                     }
                 }
+                else
+                {
+                    dValues.Add(new { register = reg, value = (int?)null, ok = false, error = "Disconnected" });
+                }
+            }
 
-                foreach (var buf in telemetryBuffers)
+            foreach (var buf in telemetryBuffers)
+            {
+                if (connected)
                 {
                     try
                     {
@@ -799,6 +806,10 @@ namespace test1
                     {
                         buffers.Add(new { path = buf.Path, values = new int[0], ok = false, error = ex.Message });
                     }
+                }
+                else
+                {
+                    buffers.Add(new { path = buf.Path, values = new int[0], ok = false, error = "Disconnected" });
                 }
             }
 

@@ -663,8 +663,9 @@ function renderTelemetry() {
 
   // ensure controls reflect connection state
   if (dom.writeBufferButton) dom.writeBufferButton.disabled = !connected;
-  if (dom.writeBufferPath) dom.writeBufferPath.disabled = !connected;
-  if (dom.writeBufferValue) dom.writeBufferValue.disabled = !connected;
+  // keep path and value inputs enabled so users can prepare data
+  if (dom.writeBufferPath) dom.writeBufferPath.disabled = false;
+  if (dom.writeBufferValue) dom.writeBufferValue.disabled = false;
 
   // enable/disable send cad button
   const sendCadBtn = document.getElementById('send-cad-x-button');
@@ -672,14 +673,8 @@ function renderTelemetry() {
 
   if (!dom.telemetryContent) return;
 
-  if (!connected) {
-    dom.telemetryContent.innerHTML = '<div class="telemetry-empty">Không có dữ liệu telemetry. Kết nối PLC để kích hoạt.</div>';
-    return;
-  }
-
   const rows = [];
-
-  rows.push(`<div class="telemetry-header">Telemetry (connected)</div>`);
+  rows.push(`<div class="telemetry-header">Telemetry (${connected ? 'connected' : 'disconnected'})</div>`);
 
   if (dValues.length) {
     rows.push('<div class="telemetry-section"><div class="telemetry-title">D registers</div><table class="telemetry-table"><thead><tr><th>Register</th><th>Value</th><th>Status</th></tr></thead><tbody>');
