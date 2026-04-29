@@ -103,7 +103,7 @@ namespace test1
         private string currentView = "control";
         private string currentTheme = "dark";
         private string plcIpAddress = "192.168.3.39";
-        private int plcPort = 3000;
+        private int plcPort = 0;
         private string s7IpAddress = "192.168.0.1";
         private short s7Rack = 0;
         private short s7Slot = 1;
@@ -372,8 +372,7 @@ namespace test1
 
         private async Task HandleConnectMitsuAsync(Dictionary<string, object> payload)
         {
-            plcIpAddress = GetString(payload, "ip", plcIpAddress).Trim();
-            plcPort = Math.Max(0, GetInt(payload, "port", plcPort));
+            plcPort = GetInt(payload, "station", plcPort);
 
             if (plcComm != null && plcComm.IsConnected)
             {
@@ -389,7 +388,7 @@ namespace test1
             {
                 if (plcComm != null) { try { plcComm.Dispose(); } catch { } plcComm = null; }
                 plcComm = new PLCCommunication(plcIpAddress, plcPort);
-                bool ok = plcComm.Connect();
+                bool ok = await Task.Run(() => plcComm.Connect());
                 UpdateBanner();
                 if (ok)
                 {
@@ -474,7 +473,7 @@ namespace test1
             {
                 if (s7Comm != null) { try { s7Comm.Dispose(); } catch { } s7Comm = null; }
                 s7Comm = new SiemensCommunication(s7IpAddress, s7Rack, s7Slot);
-                bool ok = (s7Comm.Connect() == 0);
+                bool ok = await Task.Run(() => s7Comm.Connect() == 0);
                 UpdateBanner();
                 if (ok)
                 {
@@ -846,7 +845,7 @@ namespace test1
                     banner = connectionBanner,
                     ip = plcIpAddress,
                     port = plcPort,
-                    meta = "MX Component logical station: 0",
+                    station = 0,
                     buttonText = connected ? "DISCONNECT SYSTEM" : "CONNECT SYSTEM"
                 },
                 coordinates = new[]

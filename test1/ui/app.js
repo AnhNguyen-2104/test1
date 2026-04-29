@@ -59,8 +59,7 @@ function cacheDom() {
   dom.themeToggle = document.getElementById("theme-toggle");
   dom.connectButton = document.getElementById("connect-button");
   dom.connectS7Button = document.getElementById("connect-s7-button");
-  dom.plcIp = document.getElementById("plc-ip");
-  dom.plcPort = document.getElementById("plc-port");
+  dom.plcStation = document.getElementById("plc-station");
   dom.connectionBanner = document.getElementById("connection-banner");
   dom.mitsuDot = document.getElementById("mitsu-status-dot");
   dom.mitsuText = document.getElementById("mitsu-status-text");
@@ -179,8 +178,7 @@ function bindEvents() {
     dom.connectButton.addEventListener("click", () => {
       showToast("info", "Mitsubishi", "Đang kết nối...");
       post("connectMitsu", {
-        ip: dom.plcIp.value.trim(),
-        port: parseInt(dom.plcPort.value, 10) || 0
+        station: parseInt(dom.plcStation.value, 10) || 0
       });
     });
   }
