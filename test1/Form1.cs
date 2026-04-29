@@ -779,7 +779,7 @@ namespace test1
                 {
                     try
                     {
-                        int v = ReadDeviceValue(reg);
+                        int v = plcComm.ReadDeviceValue(reg);
                         dValues.Add(new { register = reg, value = v, ok = true });
                     }
                     catch (Exception ex)
